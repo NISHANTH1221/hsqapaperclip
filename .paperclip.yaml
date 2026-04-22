@@ -1,0 +1,113 @@
+schema: "paperclip/v1"
+agents:
+  api-testing-agent:
+    role: "engineer"
+    icon: "search"
+    capabilities: "Process 2 — Understands tasks, maps API flows, sets up test data, runs happy/negative/edge/idempotency tests via Postman, validates requests and responses, detects functional/logical/data/silent issues, checks for blockers, reports bugs with severity and steps, and determines Cypress automation readiness."
+    adapter:
+      config:
+        dangerouslySkipPermissions: true
+        graceSec: 20
+        model: "litellm/open-large"
+      type: "opencode_local"
+  cypress-feasibility-agent:
+    role: "engineer"
+    icon: "eye"
+    capabilities: "Process 3 — Analyses the Cypress repo structure, checks connector config presence, detects duplicate test cases, verifies commands.js functions exist, writes a test plan, and outputs a feasibility verdict table. Only clears for test generation when all checks are PASS or FIXED."
+    adapter:
+      config:
+        dangerouslySkipPermissions: true
+        graceSec: 20
+        model: "litellm/open-large"
+      type: "opencode_local"
+  github-agent:
+    role: "engineer"
+    icon: "git-branch"
+    capabilities: "Process 6 — Creates the GitHub issue (following .github/ISSUE\\_TEMPLATE) and PR (following .github/PULL\\_REQUEST\\_TEMPLATE.md) from the parent issue worktree after CEO confirms all runner checkpoints pass. Watches the PR for reviewer comments and routes them back to CEO for re-dispatch to Test Generation Agent. Reports PR merge/close state so CEO can clean up the worktree."
+    adapter:
+      config:
+        dangerouslySkipPermissions: true
+        graceSec: 20
+        model: "litellm/open-large"
+      type: "opencode_local"
+    inputs:
+      env:
+        GITHUB_TOKEN:
+          description: "Provide GITHUB_TOKEN for agent github-agent"
+          kind: "secret"
+          default: ""
+          requirement: "optional"
+  qa-coverage-agent:
+    role: "ceo"
+    adapter:
+      config:
+        dangerouslySkipPermissions: true
+        graceSec: 20
+        model: "litellm/open-large"
+      type: "opencode_local"
+    runtime:
+      heartbeat:
+        intervalSec: 300
+        maxConcurrentRuns: 1
+    permissions:
+      canCreateAgents: true
+  runner-agent:
+    role: "engineer"
+    icon: "terminal"
+    capabilities: "Process 5 — Verifies the server is running, sets up Cypress environment variables, identifies changed specs, runs prerequisite specs (01-AccountCreate, 02-CustomerCreate, 03-ConnectorCreate) followed by the changed spec, executes per connector, and reports pass/fail results."
+    adapter:
+      config:
+        dangerouslySkipPermissions: true
+        graceSec: 20
+        model: "litellm/open-large"
+      type: "opencode_local"
+  test-generation-agent:
+    role: "engineer"
+    icon: "code"
+    capabilities: "Process 4 — Generates Cypress test specs following the exact repo structure, only after all feasibility checks are PASS or FIXED. Uses verified commands.js functions, globalState for IDs, should\\_continue\\_further() gates, and covers happy path, negative, and edge cases."
+    adapter:
+      config:
+        dangerouslySkipPermissions: true
+        graceSec: 20
+        model: "litellm/open-large"
+      type: "opencode_local"
+  validation-agent:
+    role: "engineer"
+    icon: "shield"
+    capabilities: "Process 1 — Validates features and bugs against the feature matrix using the Deepwiki MCP before any test work begins. Reports BLOCKED immediately if the feature is not in scope."
+    adapter:
+      config:
+        dangerouslySkipPermissions: true
+        graceSec: 20
+        model: "litellm/open-large"
+      type: "opencode_local"
+company:
+  requireBoardApprovalForNewAgents: false
+projects:
+  hyperswitch:
+    color: "#8b5cf6"
+    status: "planned"
+    workspaces:
+      hyperswitch:
+        name: "hyperswitch"
+        defaultRef: "main"
+        isPrimary: true
+        repoRef: "qa/QAA-38-clean"
+        repoUrl: "https://github.com/juspay/hyperswitch/tree/main/cypress-tests"
+        sourceType: "git_repo"
+        visibility: "default"
+  onboarding:
+    color: "#6366f1"
+    status: "completed"
+sidebar:
+  agents:
+    - "qa-coverage-agent"
+    - "api-testing-agent"
+    - "cypress-feasibility-agent"
+    - "github-agent"
+    - "runner-agent"
+    - "test-generation-agent"
+    - "validation-agent"
+  projects:
+    - "onboarding"
+    - "hyperswitch"
