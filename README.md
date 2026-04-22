@@ -1,7 +1,5 @@
 # QA Automation Labs
 
-![Org Chart](images/org-chart.png)
-
 ## What's Inside
 
 > This is an [Agent Company](https://agentcompanies.io) package from [Paperclip](https://paperclip.ing)
