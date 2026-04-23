@@ -218,7 +218,7 @@ Populate every section. Never leave a section blank or with a placeholder like `
   - The summary table at the bottom is derived from the blocks and goes last — it does not replace the blocks.
   - If any block has `Failed > 0`, you should NOT be opening this PR. Stop and report `BLOCKED: CEO gate was false — at least one regression has failures` back to the CEO.
 
-- **Linked issues** — `Closes #<issue_number_from_step_5>`. If the original ticket also references an upstream issue, add `Related: <upstream-issue-url>`.
+- **Linked issues** — MANDATORY. Include `Closes #<issue_number_from_step_5>` in the PR body so GitHub auto-links the issue you just created in Step 5 (this also causes the issue to auto-close on merge). If the original ticket also references an upstream issue, add `Related: <upstream-issue-url>`. Never open a PR without this line — the QA pipeline relies on the issue↔PR link for traceability.
 
 - **Checklist** — tick only items that genuinely apply (tests added, docs updated if any docs changed, etc.). Leave untouched items unchecked rather than ticking blindly.
 
@@ -229,8 +229,11 @@ gh pr create \
   --base main \
   --head <branch_name> \
   --title "test(cypress): <FlowName> for <connector>" \
-  --body-file /tmp/qa-pr-body-<pipeline_issue_id>.md
+  --body-file /tmp/qa-pr-body-<pipeline_issue_id>.md \
+  --label "S-test-ready"
 ```
+
+The `S-test-ready` label is mandatory on every PR this agent opens — it is the signal that the PR has cleared the QA pipeline gate and is ready for reviewer pickup. If the label does not yet exist on the repo, create it once with `gh label create "S-test-ready" --description "QA pipeline gate passed — PR ready for review" --color "0E8A16"` and then re-run the `gh pr create` above. Never silently drop the `--label` flag if the label is missing.
 
 Save the PR URL + number. Verify the PR body rendered correctly:
 
@@ -380,6 +383,7 @@ Only when `state == MERGED` or `state == CLOSED` is the CEO permitted to remove 
 - Never commit files outside `cypress-tests/` (e.g. `.claude/`, `.paperclip/`, random dotfiles). If the diff shows them → STOP and report.
 - Never echo, log, or comment the `$GITHUB_TOKEN` value — reference it by env-var name only.
 - Never re-create a PR when changes are requested — push to the same branch.
+- Every PR opened by this agent MUST carry the `S-test-ready` label and MUST link the Step 5 issue via `Closes #<n>`. If either is missing at verification time (`gh pr view <n> --json labels,body`), fix it immediately with `gh pr edit` before marking the subtask `done`.
 - Never delete the worktree. That is the CEO's job.
 - Never poll PRs for reviewer activity or merge-conflict state. That is the PR Maintenance Agent's job, driven by its scheduled routine. You act only on CEO delegation.
 - Never run the pipeline yourself. You are the git/GitHub specialist — all validation, testing, generation, and running is handled upstream.
