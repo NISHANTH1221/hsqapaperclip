@@ -23,7 +23,7 @@ agents:
   github-agent:
     role: "engineer"
     icon: "git-branch"
-    capabilities: "Process 6 — Creates the GitHub issue (following .github/ISSUE\\_TEMPLATE) and PR (following .github/PULL\\_REQUEST\\_TEMPLATE.md) from the parent issue worktree after CEO confirms all runner checkpoints pass. Watches the PR for reviewer comments and routes them back to CEO for re-dispatch to Test Generation Agent. Reports PR merge/close state so CEO can clean up the worktree."
+    capabilities: "Process 6 — Creates the GitHub issue (following .github/ISSUE\\_TEMPLATE) and PR (following .github/PULL\\_REQUEST\\_TEMPLATE.md) from the parent issue worktree (branch `$BRANCH_PREFIX/QAA-<n>`) after CEO confirms all runner checkpoints pass. Also handles CEO re-dispatches after Test Generation Agent revises the spec for reviewer comments or resolves a merge conflict — commits and pushes the revised worktree to the same branch so the PR auto-updates. Reports PR merge/close state so CEO can clean up the worktree. Sole push authority in the pipeline."
     adapter:
       config:
         dangerouslySkipPermissions: true
@@ -37,6 +37,33 @@ agents:
           kind: "secret"
           default: ""
           requirement: "optional"
+        BRANCH_PREFIX:
+          description: "Company short form used as the branch/worktree namespace (e.g. `qal`). All PR branches are named `$BRANCH_PREFIX/QAA-<n>`. Must match the value set on qa-coverage-agent and pr-maintenance-agent."
+          kind: "string"
+          default: ""
+          requirement: "required"
+  pr-maintenance-agent:
+    role: "engineer"
+    icon: "git-merge"
+    capabilities: "Routine-driven PR observer — every N minutes sweeps open bot-authored $BRANCH_PREFIX/QAA-* PRs. For each PR whose parent pipeline issue exists on THIS Paperclip instance (two-gate match), relays new reviewer activity, BEHIND/DIRTY state, and merge conflicts to the parent pipeline issue so the QA Coverage Agent is woken to orchestrate the fix. READ-only on GitHub: never creates PRs or issues, never pushes. All resolution work is delegated by the CEO to Test Generation Agent → Runner Agent → GitHub Agent."
+    adapter:
+      config:
+        dangerouslySkipPermissions: true
+        graceSec: 20
+        model: "litellm/open-large"
+      type: "opencode_local"
+    inputs:
+      env:
+        GITHUB_TOKEN:
+          description: "Bot token for fetching PR reviews/comments (sourced from `gh auth token`). Shared with github-agent. READ-only scope — this agent never pushes."
+          kind: "secret"
+          default: ""
+          requirement: "required"
+        BRANCH_PREFIX:
+          description: "Company short form used as the branch/worktree namespace (e.g. `qal`). PR filter becomes `^$BRANCH_PREFIX/QAA-\\d+$`. Must match the value set on qa-coverage-agent and github-agent."
+          kind: "string"
+          default: ""
+          requirement: "required"
   qa-coverage-agent:
     role: "ceo"
     adapter:
@@ -51,6 +78,13 @@ agents:
         maxConcurrentRuns: 1
     permissions:
       canCreateAgents: true
+    inputs:
+      env:
+        BRANCH_PREFIX:
+          description: "Company short form used as the branch/worktree namespace (e.g. `qal`). Worktree branches are created as `$BRANCH_PREFIX/QAA-<n>`. Must match the value set on github-agent and pr-maintenance-agent."
+          kind: "string"
+          default: ""
+          requirement: "required"
   runner-agent:
     role: "engineer"
     icon: "terminal"
@@ -64,7 +98,7 @@ agents:
   test-generation-agent:
     role: "engineer"
     icon: "code"
-    capabilities: "Process 4 — Generates Cypress test specs following the exact repo structure, only after all feasibility checks are PASS or FIXED. Uses verified commands.js functions, globalState for IDs, should\\_continue\\_further() gates, and covers happy path, negative, and edge cases."
+    capabilities: "Process 4 — Three modes: (A) initial generation of Cypress specs following the exact repo structure after feasibility checks pass; (B) targeted revisions to an existing spec in response to reviewer comments on an open PR; (C) merge-conflict resolution — merges origin/main into the worktree branch and resolves conflicts using Cypress-specific heuristics (spec additions, commands.js, globalState, fixtures), escalating to the CEO for unknown conflict shapes. Uses verified commands.js functions, globalState for IDs, should\\_continue\\_further() gates, and covers happy path, negative, and edge cases."
     adapter:
       config:
         dangerouslySkipPermissions: true
@@ -105,6 +139,7 @@ sidebar:
     - "api-testing-agent"
     - "cypress-feasibility-agent"
     - "github-agent"
+    - "pr-maintenance-agent"
     - "runner-agent"
     - "test-generation-agent"
     - "validation-agent"

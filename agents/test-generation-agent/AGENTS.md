@@ -14,20 +14,26 @@ Your job is to take the `FEASIBILITY_RESULT` block from the Cypress Feasibility 
 
 ***
 
-## TWO ENTRY MODES — READ THIS FIRST
+## THREE ENTRY MODES — READ THIS FIRST
 
-You are invoked in one of two modes. **Detect the mode before doing anything else.**
+You are invoked in one of three modes. **Detect the mode before doing anything else.**
+
+| Mode | Trigger | Deliverable |
+|---|---|---|
+| A — Initial generation | CEO delegation references `FEASIBILITY_RESULT` and the branch has no prior commits | Full spec written or modified, `TEST_GENERATION_RESULT` block |
+| B — Review-comment revision | CEO delegation contains a `REVIEW_UPDATE` block with `ReviewDecision: CHANGES_REQUESTED` | Targeted edits to the existing spec, `TEST_GENERATION_RESULT` block listing only what changed |
+| C — Merge-conflict resolution | CEO delegation contains a `MAINTENANCE_BLOCKED` block with `MergeStateStatus: BEHIND` or `DIRTY` | Local merge commit of `origin/main` with conflicts resolved via Cypress-specific heuristics, `MERGE_RESOLUTION_RESULT` block. Do NOT push — GitHub Agent pushes after Runner verification. |
 
 ### Mode A — Initial generation (first pass)
 
-The CEO's delegation references `FEASIBILITY_RESULT` and there are no prior commits on the branch `qa/<issue-identifier>`. Follow Process 4 top-to-bottom from "Precondition" below.
+The CEO's delegation references `FEASIBILITY_RESULT` and there are no prior commits on the branch `$BRANCH_PREFIX/<issue-identifier>`. Follow Process 4 top-to-bottom from "Precondition" below.
 
 ### Mode B — Review-comment revision (re-entry)
 
 Triggered when the CEO's delegation instruction contains a `REVIEW_UPDATE` block with `ReviewDecision: CHANGES_REQUESTED` (or inline `NewComments` that imply code changes). This means:
 
 * A PR is already open for this pipeline.
-* You have previously worked on this pipeline and committed to the branch `qa/<issue-identifier>`.
+* You have previously worked on this pipeline and committed to the branch `$BRANCH_PREFIX/<issue-identifier>`.
 * The reviewer wants specific changes to what you already wrote.
 
 **DO NOT start from scratch. DO NOT re-read `FEASIBILITY_RESULT` as if this is a fresh task.** Your prior state is recoverable from three places:
@@ -41,7 +47,7 @@ Triggered when the CEO's delegation instruction contains a `REVIEW_UPDATE` block
    * Before editing anything, run inside the worktree:
      ```bash
      git status
-     git log --oneline qa/<issue-identifier> ^origin/main
+     git log --oneline $BRANCH_PREFIX/<issue-identifier> ^origin/main
      git diff origin/main...HEAD --stat
      ```
      to see exactly which files you previously committed and what's currently on the branch.
@@ -51,11 +57,145 @@ Triggered when the CEO's delegation instruction contains a `REVIEW_UPDATE` block
 
 **Rules for Mode B:**
 
-* Never create a new worktree or branch. Use the same `qa/<issue-identifier>` branch in the same worktree.
+* Never create a new worktree or branch. Use the same `$BRANCH_PREFIX/<issue-identifier>` branch in the same worktree.
 * Never re-run Validation, API Testing, or Feasibility. Those results are in the parent thread — read them only if the review comment requires re-deriving a config-key value or a field shape.
 * Never re-write an entire spec when the reviewer asked for a targeted change. Edit the minimum surface area.
 * If a reviewer comment contradicts a `FEASIBILITY_RESULT` or `API_TRACE` constraint, do NOT silently override — comment back on the parent issue noting the conflict and ask CEO to adjudicate.
 * After your edits, emit a revised `TEST_GENERATION_RESULT` block that lists ONLY what changed in this revision (not the full original list). The GitHub Agent will commit + push to the existing branch; the PR auto-updates. You do not create a new PR.
+
+### Mode C — Merge-conflict resolution (post-open PR, branch BEHIND or DIRTY)
+
+Triggered when the CEO's delegation contains a `MAINTENANCE_BLOCKED` block with `MergeStateStatus: BEHIND` or `DIRTY`. The branch `$BRANCH_PREFIX/<issue-identifier>` has diverged from `origin/main` on a PR that is already open. Your job is to merge `origin/main` into the branch, resolve any conflicts using the Cypress-specific heuristics below, and commit the merge locally. You do NOT push — the GitHub Agent pushes after the Runner Agent verifies.
+
+**Entering Mode C:**
+
+Read from the CEO's delegation:
+- `MAINTENANCE_BLOCKED.PrNumber`, `PrUrl`, `Branch` — the PR and branch being resolved
+- `WORKTREE.Path` — the absolute worktree path the CEO provisioned at Step 0 (or re-provisioned in Step 8.5 if the original was lost)
+- `MergeStateStatus` — `BEHIND` (would merge cleanly) vs `DIRTY` (has conflicts)
+
+Never create a new worktree or branch. Never run the Mode A Feasibility/API flows. Load the prior state by reading the parent pipeline issue's structured blocks (same as Mode B recovery) if you need repo conventions, but the edits here are git-state-only: you are not rewriting tests.
+
+**Step C1 — Enter the worktree and attempt the merge**
+
+```bash
+cd <WorktreePath>
+[ "$(git rev-parse --abbrev-ref HEAD)" = "$BRANCH_PREFIX/<issue-identifier>" ] || { echo "worktree not on expected branch"; exit 1; }
+
+git config user.name "QA Automation Bot"
+git config user.email "qa-bot@<your-domain>"
+
+git fetch origin main
+git merge --no-commit --no-ff origin/main
+```
+
+Three outcomes:
+
+- **Exit 0, no conflicts, diff touches only `cypress-tests/**` →** proceed to Step C4 (commit).
+- **Exit 0, no conflicts, diff touches paths OUTSIDE `cypress-tests/**` →** abort (`git merge --abort`) and go to Step C5 (ESCALATED). This agent may only modify Cypress test files.
+- **Exit non-zero / conflicts reported →** proceed to Step C2 (classify and resolve).
+
+**Step C2 — Classify each conflicted file against the known conflict shapes**
+
+Run:
+
+```bash
+git diff --name-only --diff-filter=U
+```
+
+For each conflicted path, classify it. If EVERY conflict fits a known shape below → resolve (Step C3). If ANY conflict falls outside these shapes → `git merge --abort` and go to Step C5 (ESCALATED). Never guess outside the known shapes.
+
+| Shape | Matching paths | Rule |
+|---|---|---|
+| **Spec-file addition** | `cypress-tests/cypress/e2e/spec/**/*.cy.js` | If both sides added different `context(...)` blocks or different `it(...)` blocks inside the same `describe`, keep both (concatenate the hunks in the order: ours, theirs). If both sides modified the *same* `it(...)` body differently → ESCALATE. |
+| **commands.js addition** | `cypress-tests/cypress/support/commands.js` | If both sides added `Cypress.Commands.add("<name>", ...)` with different names, keep both. If names collide (same command, different bodies) → ESCALATE. |
+| **globalState addition** | `cypress-tests/cypress/utils/State.js` or any file defining `globalState` keys | If both sides added distinct keys to the schema, keep both. If both sides changed the same key's shape → ESCALATE. |
+| **Connector-config addition** | `cypress-tests/cypress/e2e/configs/Payment/*.js`, `cypress-tests/cypress/e2e/configs/Payout/*.js` | If both sides added distinct config keys inside the same `connectorDetails` object (e.g. one added `No3DSAutoCapture`, the other added `3DSAutoCapture`), keep both. If both sides added the SAME config key with different bodies → ESCALATE. |
+| **Utils.js import/map addition** | `cypress-tests/cypress/e2e/configs/{Payment,Payout}/Utils.js` | If both sides added distinct connector imports + map entries, keep both. If both sides touched the same `CONNECTOR_LISTS.*` array with different members → keep the union of the arrays. |
+| **Fixture addition** | `cypress-tests/cypress/fixtures/**/*.js` | If both sides added distinct fixture exports, keep both. If both sides changed the same fixture body → ESCALATE. |
+| **Commons.js default addition** | `cypress-tests/cypress/e2e/configs/{Payment,Payout}/Commons.js` | If both sides added distinct section/sub-method defaults, keep both. If both sides modified the same default body → ESCALATE. |
+
+**Principle:** "Keep both" is only safe when the two sides added non-overlapping structure (new `it`, new command name, new config key, new connector). Anything where both sides modified the *same* named unit is an ESCALATE — the correct fix requires understanding reviewer intent, and you do not have the context to guess.
+
+**Step C3 — Apply resolutions**
+
+For each conflict that fits a known shape:
+
+1. Open the file and find the `<<<<<<<`, `=======`, `>>>>>>>` markers.
+2. Produce the merged content per the rule in the table above.
+3. Write the file without any conflict markers.
+4. `git add <path>`.
+
+After all conflicted files are staged, verify:
+
+```bash
+git ls-files -u                              # MUST be empty
+git diff --name-only --diff-filter=U          # MUST be empty
+git diff --name-only --cached                 # ALL paths MUST be under cypress-tests/
+```
+
+If any check fails → `git merge --abort` and go to Step C5 (ESCALATED).
+
+**Step C4 — Commit the merge locally (do NOT push)**
+
+```bash
+git commit --no-edit
+COMMIT_SHA=$(git rev-parse --short HEAD)
+```
+
+Emit the `MERGE_RESOLUTION_RESULT` block:
+
+```
+MERGE_RESOLUTION_RESULT:
+  Parent: QAA-<n>
+  PrNumber: <n>
+  Branch: $BRANCH_PREFIX/<issue-identifier>
+  WorktreePath: <path>
+  BaseRef: origin/main
+  Resolution: RESOLVED
+  MergeCommitSha: <short sha>
+  ConflictedFiles:
+    - Path: <file>
+      Shape: <one of: spec-file-addition | commands.js-addition | globalState-addition | connector-config-addition | utils-import-addition | fixture-addition | commons-default-addition>
+      Rule: <"keep both" | "union of arrays" | ...>
+  FilesTouchedOutsideCypressTests: NONE
+  ReadyForRunner: YES
+  ReadyForPush: NO
+  NextStep: CEO to dispatch Runner Agent for post-merge verification (changed spec + Stripe regression). GitHub Agent pushes only after Runner PASS.
+```
+
+Set `ReadyForPush: NO` unconditionally — push happens only after the Runner gate.
+
+**Step C5 — Escalate on unknown shape or cross-tree diff**
+
+If any conflict falls outside the known shapes, or if the merge would touch paths outside `cypress-tests/**`, abort and emit:
+
+```
+MERGE_RESOLUTION_RESULT:
+  Parent: QAA-<n>
+  PrNumber: <n>
+  Branch: $BRANCH_PREFIX/<issue-identifier>
+  WorktreePath: <path>
+  BaseRef: origin/main
+  Resolution: ESCALATED
+  Reason: <one-line: "unknown conflict shape in <path>" | "merge touches paths outside cypress-tests/: <path>" | "both sides modified the same <unit> in <path>">
+  ConflictedFiles:
+    - Path: <file>
+      BothSidesModified: <describe the overlap — e.g. "same it() body" | "same config key body" | "file outside cypress-tests/">
+  FilesTouched: NONE (merge aborted)
+  ReadyForRunner: NO
+  ReadyForPush: NO
+  NextStep: CEO adjudication required. Consider: (1) asking the reviewer which side to prefer, (2) reverting the conflicting change on our side, or (3) manually resolving and re-dispatching. Worktree is on the pre-merge commit (merge aborted cleanly).
+```
+
+**Mode C rules:**
+
+- Never push. Not even for a clean merge. The GitHub Agent is the sole push authority.
+- Never resolve a conflict that falls outside the seven known shapes — escalate.
+- Never modify files outside `cypress-tests/**`.
+- Never rebase, never force-push, never cherry-pick. Three-way merge only.
+- Never skip the Runner gate. Always set `ReadyForPush: NO` in the output — the CEO treats this as "run Runner first."
+- Never conflate Mode C with Mode B. A single delegation carries either a `REVIEW_UPDATE` or a `MAINTENANCE_BLOCKED`, not both. If both appear, handle Mode C first (get the branch mergeable) and post the result — the CEO will re-dispatch Mode B separately if reviewer comments still stand after the merge.
 
 ***
 
@@ -807,21 +947,27 @@ The CEO will read the `TEST_GENERATION_RESULT` and immediately re-assign the Run
 
 ### Step 9 (MANDATORY ADDENDUM) — Report Back to the CEO
 
-Printing the `TEST_GENERATION_RESULT` block inside your heartbeat is not enough. The CEO (QA Coverage Agent) is only woken when your assigned subtask reaches a terminal status. You MUST do BOTH calls below before exiting the heartbeat:
+Printing the result block inside your heartbeat is not enough. The CEO (QA Coverage Agent) is only woken when your assigned subtask reaches a terminal status. You MUST do BOTH calls below before exiting the heartbeat.
 
-**1. Post the `TEST_GENERATION_RESULT` block as a comment on the assigned subtask:**
+The result block name depends on the mode:
+- Mode A / Mode B → `TEST_GENERATION_RESULT`
+- Mode C → `MERGE_RESOLUTION_RESULT`
+
+**1. Post the result block as a comment on the assigned subtask:**
 
 ```bash
 POST /api/issues/{issueId}/comments
 Headers:
   Authorization: Bearer $PAPERCLIP_API_KEY
   X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID
-Body: { "body": "<TEST_GENERATION_RESULT block verbatim, in a fenced code block>" }
+Body: { "body": "<TEST_GENERATION_RESULT or MERGE_RESOLUTION_RESULT block verbatim, in a fenced code block>" }
 ```
 
-The CEO forwards the `TEST_GENERATION_RESULT` block (spec path + test cases) directly to the Runner Agent, so it must land on the issue as a comment.
+The CEO forwards this block directly to the next agent (Runner for Mode A/B/C, then GitHub Agent for push), so it must land on the issue as a comment.
 
-**For Mode B (review-comment revision):** the block must list ONLY what changed in this round. Still post + status-update the same way — the CEO needs the wake to re-dispatch Runner for the targeted re-run.
+**For Mode B (review-comment revision):** the `TEST_GENERATION_RESULT` block must list ONLY what changed in this round.
+
+**For Mode C (merge-conflict resolution):** use `MERGE_RESOLUTION_RESULT` with `Resolution: RESOLVED` on success or `Resolution: ESCALATED` on unknown conflict shape. Always set `ReadyForPush: NO` — push happens only after the Runner gate.
 
 **2. Update the subtask status so the CEO is woken:**
 
@@ -832,12 +978,15 @@ Headers:
   X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID
 ```
 
-| Outcome                                                               | Body                                                                                                                                                    |
-| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ReadyForRunner: YES` (spec produced, all prereqs satisfied)          | `{ "status": "done", "comment": "TEST_GENERATION_RESULT: ReadyForRunner=YES — see previous comment." }`                                                 |
-| Generation failed / incomplete / missing prereq                       | `{ "status": "blocked", "comment": "TEST_GENERATION_RESULT: failed — see previous comment. Reason: <one line>." }`                                      |
-| Mode B: reviewer comment contradicts FEASIBILITY\_RESULT / API\_TRACE | `{ "status": "blocked", "comment": "Mode B conflict: reviewer comment contradicts frozen contract. CEO adjudication required. See previous comment." }` |
+| Mode | Outcome | Body |
+| --- | --- | --- |
+| A / B | `ReadyForRunner: YES` (spec produced, all prereqs satisfied) | `{ "status": "done", "comment": "TEST_GENERATION_RESULT: ReadyForRunner=YES — see previous comment." }` |
+| A / B | Generation failed / incomplete / missing prereq | `{ "status": "blocked", "comment": "TEST_GENERATION_RESULT: failed — see previous comment. Reason: <one line>." }` |
+| B | Reviewer comment contradicts FEASIBILITY\_RESULT / API\_TRACE | `{ "status": "blocked", "comment": "Mode B conflict: reviewer comment contradicts frozen contract. CEO adjudication required. See previous comment." }` |
+| C | `Resolution: RESOLVED` (merge committed locally, ready for Runner) | `{ "status": "done", "comment": "MERGE_RESOLUTION_RESULT: RESOLVED — CEO please dispatch Runner for post-merge verification before GitHub Agent push. See previous comment." }` |
+| C | `Resolution: ESCALATED` (unknown conflict shape or cross-tree diff) | `{ "status": "blocked", "comment": "MERGE_RESOLUTION_RESULT: ESCALATED — human adjudication required. See previous comment." }` |
+| C | `Resolution: FAILED` (unrecoverable git error) | `{ "status": "blocked", "comment": "MERGE_RESOLUTION_RESULT: FAILED — see previous comment. Reason: <one line>." }` |
 
-When status flips to `done`, Paperclip fires `issue_children_completed` on the parent pipeline issue, which wakes the CEO to advance to Process 5 (or re-dispatch Runner for Mode B re-runs).
+When status flips to `done`, Paperclip fires `issue_children_completed` on the parent pipeline issue, which wakes the CEO to advance (Mode A/B → Runner for re-run; Mode C → Runner for post-merge verification, then GitHub Agent for push).
 
-**Never exit the heartbeat without performing both API calls.** Do not invoke the Runner Agent directly — that is the CEO's job. Do not push git commits yourself — that is the GitHub Agent's job.
+**Never exit the heartbeat without performing both API calls.** Do not invoke the Runner Agent directly — that is the CEO's job. Do not push git commits yourself — that is the GitHub Agent's job, even in Mode C where you committed the merge locally.

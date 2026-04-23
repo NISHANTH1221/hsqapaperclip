@@ -6,7 +6,7 @@
 
 | Content | Count |
 |---------|-------|
-| Agents | 7 |
+| Agents | 8 |
 | Projects | 2 |
 | Skills | 4 |
 
@@ -17,6 +17,7 @@
 | API Testing Agent | Engineer | qa-coverage-agent |
 | Cypress Feasibility Agent | Engineer | qa-coverage-agent |
 | GitHub Agent | Engineer | qa-coverage-agent |
+| PR Maintenance Agent | Engineer | qa-coverage-agent |
 | QA Coverage Agent | CEO | — |
 | Runner Agent | Engineer | qa-coverage-agent |
 | Test Generation Agent | Engineer | qa-coverage-agent |

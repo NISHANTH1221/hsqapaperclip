@@ -59,8 +59,10 @@ Within a single ticket: never run two steps in parallel. Never skip a step. Neve
 
 Every pipeline runs in its own git worktree so multiple pipelines can work on the same repo in parallel without stomping on each other. Do this once, at first entry into the pipeline, before assigning Process 1.
 
+**Pre-flight:** `$BRANCH_PREFIX` must be set (non-empty). If missing → STOP and comment on the parent `BLOCKED: BRANCH_PREFIX not injected — operator must set it in this agent's adapter config.`. Every branch and every downstream filter (`pr-maintenance-agent`'s sweep, `github-agent`'s push target) depends on this value being the same across the three agents.
+
 **Worktree path convention:** `/workspace/cypress-tests-<issue-identifier>` (sibling to the main repo)
-**Branch convention:** `qa/<issue-identifier>`
+**Branch convention:** `$BRANCH_PREFIX/<issue-identifier>` (e.g. `qal/QAA-12`)
 
 Check if the worktree already exists (this may be a re-entry heartbeat):
 
@@ -74,7 +76,7 @@ If absent → create it:
 ```bash
 cd /workspace/hyperswitch
 git fetch origin main
-git worktree add /workspace/cypress-tests-<issue-identifier> -b qa/<issue-identifier> origin/main
+git worktree add /workspace/cypress-tests-<issue-identifier> -b "$BRANCH_PREFIX/<issue-identifier>" origin/main
 ```
 
 Record the absolute worktree path and branch name as a comment on the parent issue so downstream heartbeats see it:
@@ -82,7 +84,7 @@ Record the absolute worktree path and branch name as a comment on the parent iss
 ```
 WORKTREE:
   Path: /workspace/cypress-tests-<issue-identifier>
-  Branch: qa/<issue-identifier>
+  Branch: $BRANCH_PREFIX/<issue-identifier>
   BaseCommit: <sha>
 ```
 
@@ -251,7 +253,7 @@ Only proceed to Step 7 after posting `GATE_PASSED`. The GitHub Agent will refuse
 - Original ticket title and description
 
 **Instruction to give the agent:**
-> Run GitHub pipeline: commit all changed files in the worktree, push to `qa/<issue-identifier>`, open a PR against main with the title and body below. Watch for review comments and report back as `GITHUB_RESULT`.
+> Run GitHub pipeline: commit all changed files in the worktree, push to `$BRANCH_PREFIX/<issue-identifier>`, open a PR against main with the title and body below. Watch for review comments and report back as `GITHUB_RESULT`.
 >
 > PR Title: `[QA] <ticket title>`
 >
@@ -280,14 +282,16 @@ Only proceed to Step 7 after posting `GATE_PASSED`. The GitHub Agent will refuse
 
 ### STEP 8 — Review-Comment Loop
 
-After the PR is open, the GitHub Agent watches for review comments. When it reports back with `ReviewDecision: CHANGES_REQUESTED`:
+After the PR is open, the PR Maintenance Agent (running on its own heartbeat routine) polls the PR for reviewer activity and posts a `REVIEW_UPDATE` comment on the **parent pipeline issue** whenever there's new activity — this comment wakes you. The `REVIEW_UPDATE` block is the authoritative trigger; do not expect the GitHub Agent to relay reviewer activity (it is no longer a polling agent).
 
-1. Read the `NewComments` list in the `GITHUB_RESULT` block.
-2. Construct a `REVIEW_UPDATE` block:
+When you read a `REVIEW_UPDATE` block with `ReviewDecision: CHANGES_REQUESTED`:
+
+1. Read the `NewComments` list in the `REVIEW_UPDATE` block posted by the PR Maintenance Agent.
+2. Enrich the `REVIEW_UPDATE` with the worktree path from the `WORKTREE` block on the parent issue:
    ```
    REVIEW_UPDATE:
      PRUrl: <url>
-     Branch: qa/<issue-identifier>
+     Branch: $BRANCH_PREFIX/<issue-identifier>
      WorktreePath: <path>
      ReviewDecision: CHANGES_REQUESTED
      NewComments:
@@ -295,14 +299,75 @@ After the PR is open, the GitHub Agent watches for review comments. When it repo
          Line: <line>
          Body: <reviewer comment verbatim>
    ```
-3. Assign Test Generation Agent (`bc10cd26`) in **Mode B** with the `REVIEW_UPDATE` block.
+3. Assign Test Generation Agent (`bc10cd26`) in **Mode B** (review-comment revision) with the enriched `REVIEW_UPDATE` block.
 4. Wait for revised `TEST_GENERATION_RESULT` (Mode B — lists only what changed).
-5. Assign Runner Agent to re-run the changed spec (targeted re-run, same connector).
-6. If Runner PASS → assign GitHub Agent to commit + push revised files (same branch — PR auto-updates).
-7. Assign GitHub Agent to re-watch for further review comments.
-8. Repeat until `ReviewDecision: APPROVED` or `ReviewDecision: MERGED`.
+5. Assign Runner Agent to re-run the changed spec (targeted re-run, same connector). Runner is a **mandatory verification gate** — no push may happen before Runner returns PASS.
+6. If Runner PASS → assign GitHub Agent to commit + push revised files (same branch — PR auto-updates). If Runner FAIL → loop back to step 3 with the `RUNNER_RESULT`.
+7. Do NOT re-assign GitHub Agent "to watch for further review comments" — that is no longer its job. The next reviewer wake comes from the PR Maintenance Agent on its next sweep.
+8. Repeat until the PR Maintenance Agent reports `ReviewDecision: APPROVED` or the PR state flips to `MERGED` / `CLOSED`.
 
-When GitHub Agent reports `ReviewDecision: APPROVED` or `PRStatus: merged` → proceed to Step 9.
+When the PR Maintenance Agent reports `ReviewDecision: APPROVED` — or you invoke the GitHub Agent for a one-off `MERGE_STATE` check and it returns `State: MERGED` — proceed to Step 9.
+
+---
+
+### STEP 8.5 — Merge-State Handler (reactive, driven by MAINTENANCE_BLOCKED)
+
+The PR Maintenance Agent posts `MAINTENANCE_BLOCKED` on the parent issue whenever a PR's `mergeStateStatus` is non-CLEAN (BEHIND, DIRTY, or BLOCKED by GitHub-side gates). You are woken by that comment. Handle it in the current heartbeat alongside any other inbox items.
+
+Read the block:
+
+```
+MAINTENANCE_BLOCKED:
+  Parent: QAA-<n>
+  PrNumber: <n>
+  PrUrl: <url>
+  Branch: $BRANCH_PREFIX/QAA-<n>
+  WorktreePath: <path or NOT_RECORDED_ON_PARENT>
+  MergeStateStatus: BEHIND | DIRTY | BLOCKED
+  Mergeable: <true|false>
+  Reason: <one-line>
+  ProposedNextStep: <text>
+```
+
+**Route by `MergeStateStatus`:**
+
+#### `BEHIND` or `DIRTY` → dispatch Test Generation Agent (Mode C)
+
+These are both fixable in the same chain — Mode C performs `git fetch` + `git merge origin/main` inside the worktree and resolves any conflicts using the Cypress-specific heuristics in its AGENTS.md.
+
+1. If `WorktreePath == NOT_RECORDED_ON_PARENT` → re-provision the worktree per Step 0 before dispatching. The branch already exists upstream as `$BRANCH_PREFIX/QAA-<n>`, so the worktree must check out that branch directly:
+   ```bash
+   cd /workspace/hyperswitch
+   git fetch origin "$BRANCH_PREFIX/QAA-<n>"
+   git worktree add /workspace/cypress-tests-QAA-<n> "$BRANCH_PREFIX/QAA-<n>"
+   ```
+   Post a fresh `WORKTREE:` block on the parent issue.
+2. Assign Test Generation Agent (`bc10cd26`) in **Mode C** (merge-conflict resolution). The delegation instruction must contain:
+   - The full `MAINTENANCE_BLOCKED` block verbatim
+   - The `WORKTREE` block with the branch name `$BRANCH_PREFIX/QAA-<n>`
+   - Instruction: *Enter the worktree at the recorded path. Run `git fetch origin main` then `git merge --no-commit --no-ff origin/main`. Resolve any conflicts using the Mode C heuristics in your AGENTS.md (spec additions, commands.js, globalState, fixtures). If any conflict falls outside the known shapes, abort the merge and escalate — do not guess. On clean resolution, commit the merge locally; do NOT push. Post a `MERGE_RESOLUTION_RESULT` block with the list of files touched and the merge commit SHA.*
+3. Wait for `MERGE_RESOLUTION_RESULT`. Possible outcomes:
+   - `Resolution: RESOLVED` — merge committed locally, all conflicts handled via known heuristics. Proceed to step 4.
+   - `Resolution: ESCALATED` — conflict shape unknown. Comment on the parent issue with the block and **wait for human intervention**. Do not proceed.
+   - `Resolution: FAILED` — Mode C could not merge cleanly for an unrecoverable reason. Comment + wait for human.
+4. Assign Runner Agent. This run is a **mandatory verification gate** — phrase the delegation explicitly as "post-merge verification, no push until this passes." Run the changed spec(s) plus Stripe regression (the same Step 6 gate pattern) on the merged worktree.
+5. On Runner PASS → assign GitHub Agent to push the merge commit to `$BRANCH_PREFIX/QAA-<n>` (same branch — PR auto-updates). The delegation instruction must name this as a post-resolution push, NOT a new PR creation, so the GitHub Agent takes the short-path (Step 1–4 of its flow, skipping PR creation and gate re-confirmation).
+6. On Runner FAIL → loop back to Mode C (the resolution introduced a regression) or to Mode B (spec bug surfaced by the merge). Do not push a broken merge.
+7. After the push, post a `MAINTENANCE_RESOLVED` comment on the parent so the PR Maintenance Agent stops re-posting the same `MAINTENANCE_BLOCKED` on the next sweep:
+   ```
+   MAINTENANCE_RESOLVED:
+     Parent: QAA-<n>
+     PrNumber: <n>
+     MergeStateStatus: CLEAN (post-merge)
+     Action: merged origin/main via Test Generation Agent Mode C
+     CommitSha: <short sha>
+     VerifiedBy: Runner Agent (PASS)
+     PushedBy: GitHub Agent
+   ```
+
+#### `BLOCKED` → human intervention
+
+Branch protection, missing required reviews, or failing required checks are not agent-resolvable. Comment on the parent pipeline issue quoting the `MAINTENANCE_BLOCKED` block verbatim and **wait for human**. Do not dispatch any agent.
 
 ---
 
@@ -312,7 +377,7 @@ After PR is merged or closed:
 
 ```bash
 git -C /workspace/hyperswitch worktree remove /workspace/cypress-tests-<issue-identifier>
-git -C /workspace/hyperswitch branch -d qa/<issue-identifier>
+git -C /workspace/hyperswitch branch -d "$BRANCH_PREFIX/<issue-identifier>"
 ```
 
 Post a comment on the parent issue:
@@ -343,7 +408,7 @@ Post this as a comment on the original issue when the pipeline completes:
 
 | Step | Agent | Status | Notes |
 |---|---|---|---|
-| 0 — Worktree | CEO | DONE | Path: <path>, Branch: qa/<issue-identifier> |
+| 0 — Worktree | CEO | DONE | Path: <path>, Branch: $BRANCH_PREFIX/<issue-identifier> |
 | 1 — Validation | Validation Agent | PASS / BLOCKED | |
 | 2 — API Testing | API Testing Agent | PASS / BLOCKED / ESCALATED | |
 | 3 — Feasibility | Cypress Feasibility Agent | PASS / BLOCKED | |
@@ -394,6 +459,9 @@ Post this as a comment on the original issue when the pipeline completes:
 - The pipeline can loop: if Step 5 finds a spec bug, **immediately re-assign to Process 4** with the failure details — no human prompt needed. If Step 5 finds an API bug, **immediately re-assign to Process 2**. Always log the loop reason in the issue comment.
 - **Never skip Step 6.** Changed-spec PASS alone does not earn a PR. Stripe regression is mandatory on every pipeline, plus full regression for each changed connector.
 - **Never hand to GitHub Agent without a `GATE_PASSED` block.** The GitHub Agent will refuse without it.
-- **Never remove the worktree before PR merge/close.** Reviewer comments need the same worktree to address fixes.
+- **Never remove the worktree before PR merge/close.** Reviewer comments and merge-conflict resolutions both need the same worktree.
 - **Always set `parentId` on every subtask** so Paperclip propagates the worktree path via execution-workspace inheritance. Never rely on free-text path references.
-- **Never create a new worktree for a review-comment revision.** Use the same worktree and same branch — the PR auto-updates on push.
+- **Never create a new worktree for a review-comment revision.** Use the same worktree and same branch — the PR auto-updates on push. The only exception is Step 8.5 when the `MAINTENANCE_BLOCKED` block reports `WorktreePath: NOT_RECORDED_ON_PARENT` — in that single case, re-provision by checking out the existing `$BRANCH_PREFIX/QAA-<n>` upstream branch (NOT by cutting a fresh branch from `origin/main`), then continue.
+- **Never push a merge commit yourself.** Mode C (Test Generation Agent) commits the merge locally; Runner verifies; only then does the GitHub Agent push. You never `git push`.
+- **Never dispatch Mode C without a `MAINTENANCE_BLOCKED` trigger.** The only source of truth for a PR's merge state is the PR Maintenance Agent's sweep. Do not speculatively run Mode C on a PR that GitHub reports as CLEAN.
+- **Always post `MAINTENANCE_RESOLVED` after a successful Mode C → Runner → GitHub push chain.** Without this, the PR Maintenance Agent's next sweep will re-post the same `MAINTENANCE_BLOCKED` and you'll loop.
