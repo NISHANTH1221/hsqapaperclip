@@ -158,7 +158,7 @@ Recommendation: Manual codebase review required before proceeding.
 ---
 
 ## RULES
-- The `/feature_matrix` API is authoritative for **connector capability** (supported payment methods, supported capture methods). A NO from the matrix for the exact method required by the feature is enough to emit BLOCKED.
+- Never rely on the feature matrix alone. It is a starting point, not the final word.
 - The `/feature_matrix` API is NOT authoritative for **endpoint existence or request/response shape**. Always do the Deepwiki codebase search (Step 2) when the matrix confirms connector support — downstream agents still need the API flow details.
 - Never paste real API keys (sandbox `snd_…`, production, or merchant-scoped) into logs, comments, or this document. Use `test_admin` for the local admin key; if a different environment is in use, reference it via an env var.
 - Never proceed to any other process yourself — your only job is validation.

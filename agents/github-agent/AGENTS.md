@@ -98,10 +98,10 @@ Stage only the expected files (specs + configs + commands.js), never `git add -A
 
 ```bash
 git add cypress-tests/cypress/e2e/spec/<FlowType>/<NewSpec>.cy.js
-git add cypress-tests/cypress/e2e/configs/<FlowType>/<ConnectorName>.js   # if changed
-git add cypress-tests/cypress/e2e/configs/<FlowType>/Utils.js             # if changed
-git add cypress-tests/cypress/e2e/configs/<FlowType>/Commons.js           # if changed
-git add cypress-tests/cypress/support/commands.js                         # if changed
+git add cypress-tests/cypress/e2e/configs/<FlowType>/<ConnectorName>.js       # if changed
+git add cypress-tests/cypress/e2e/configs/<FlowType>/Utils.js                 # if changed
+git add cypress-tests/cypress/e2e/configs/<FlowType>/Commons.js               # if changed
+git add cypress-tests/cypress/support/commands.js                             # if changed
 ```
 
 Commit message (Conventional Commits-style, no trailing period on the subject):
@@ -163,15 +163,16 @@ Populate every section. Never leave a section blank or with a placeholder like `
 - **How did you test it?** — this is the critical section. You MUST paste the **full `RUNNER_RESULT` blocks verbatim** that the CEO forwarded to you, one per regression run. Include at minimum:
   1. The changed-spec run on the target connector
   2. The full regression on the target connector
-  3. The full regression on `stripe`
-  4. Any additional changed-connector regressions (one block each)
+  3. Any additional changed-connector regressions (one block each)
+
+  **Do NOT include or wait for a Stripe regression block. CI runs Stripe automatically on every PR.**
 
   Format this section as:
 
   ````markdown
   ## How did you test it?
 
-  Full regression suite was executed against the changed connector(s) plus Stripe (mandatory baseline). All `RUNNER_RESULT` blocks from the QA pipeline are included verbatim below.
+  Full regression suite was executed against the changed connector(s). All `RUNNER_RESULT` blocks from the QA pipeline are included verbatim below.
 
   ### Changed-spec verification — `<connector>`
 
@@ -196,20 +197,11 @@ Populate every section. Never leave a section blank or with a placeholder like `
     ... (verbatim block)
   ```
 
-  ### Full regression — `stripe`
-
-  ```
-  RUNNER_RESULT:
-    Connector: stripe
-    ... (verbatim block)
-  ```
-
   ### Summary
 
   | Connector | Specs Run | Passed | Failed | Skipped | Status |
   |---|---|---|---|---|---|
   | <target connector> | <n> | <n> | 0 | <n> | PASS |
-  | stripe | <n> | <n> | 0 | <n> | PASS |
   ````
 
   Rules for this section:
@@ -218,22 +210,56 @@ Populate every section. Never leave a section blank or with a placeholder like `
   - The summary table at the bottom is derived from the blocks and goes last — it does not replace the blocks.
   - If any block has `Failed > 0`, you should NOT be opening this PR. Stop and report `BLOCKED: CEO gate was false — at least one regression has failures` back to the CEO.
 
-- **Linked issues** — MANDATORY. Include `Closes #<issue_number_from_step_5>` in the PR body so GitHub auto-links the issue you just created in Step 5 (this also causes the issue to auto-close on merge). If the original ticket also references an upstream issue, add `Related: <upstream-issue-url>`. Never open a PR without this line — the QA pipeline relies on the issue↔PR link for traceability.
+- **Linked issues** — MUST include BOTH:
+  1. `Closes #<issue_number_from_step_5>` — so the GitHub issue from Step 5 auto-closes on merge.
+  2. `Related to #<main_parent_github_issue>` — the main pipeline parent issue MUST be linked in the Development section of the PR. If the parent pipeline issue (e.g. QAA-72) has a corresponding GitHub issue, reference it here so GitHub links it in the PR sidebar. If no GitHub issue exists for the parent, create the reference as `Related: <upstream-issue-url>` or note the Paperclip issue identifier.
 
 - **Checklist** — tick only items that genuinely apply (tests added, docs updated if any docs changed, etc.). Leave untouched items unchecked rather than ticking blindly.
 
 **Build the body file, then create the PR:**
+
+**MANDATORY: The PR title MUST follow Hyperswitch's conventional commit format: `test(cypress): <description>`. Never use `[QA] ...` or any other format. A title like `[QA] Add billing descriptor Cypress test for Checkout connector` is WRONG. The correct form is `test(cypress): add billing descriptor coverage for checkout`. This applies to every PR created by this agent — no exceptions.**
 
 ```bash
 gh pr create \
   --base main \
   --head <branch_name> \
   --title "test(cypress): <FlowName> for <connector>" \
-  --body-file /tmp/qa-pr-body-<pipeline_issue_id>.md \
-  --label "S-test-ready"
+  --label "s-test-ready" \
+  --body-file /tmp/qa-pr-body-<pipeline_issue_id>.md
 ```
 
-The `S-test-ready` label is mandatory on every PR this agent opens — it is the signal that the PR has cleared the QA pipeline gate and is ready for reviewer pickup. If the label does not yet exist on the repo, create it once with `gh label create "S-test-ready" --description "QA pipeline gate passed — PR ready for review" --color "0E8A16"` and then re-run the `gh pr create` above. Never silently drop the `--label` flag if the label is missing.
+**MANDATORY: The `--label "s-test-ready"` flag in the `gh pr create` command above is required. Never omit it. The label MUST be applied at PR creation time, not added afterwards.**
+
+**After PR creation, VERIFY the label was applied:**
+```bash
+gh pr view <pr_number> --json labels --jq '.labels[].name'
+```
+If `s-test-ready` is not in the output, the PR creation failed to apply it. Fix immediately:
+```bash
+gh pr edit <pr_number> --add-label "s-test-ready"
+```
+
+**MANDATORY: Link the main pipeline parent issue in the PR's Development sidebar.**
+
+The parent pipeline issue (the original QA ticket, e.g. QAA-72) MUST appear in the PR's "Development" section on GitHub. This is achieved by:
+
+1. Including `Closes #<issue_number_from_step_5>` in the PR body (auto-links and auto-closes on merge).
+2. Including `Related to #<main_parent_github_issue_number>` in the PR body for the main parent issue.
+
+If the CEO provided a main parent GitHub issue number, use it. If only a Paperclip issue identifier exists (e.g. QAA-72) with no GitHub issue, create a GitHub issue for it in Step 5 and reference that number.
+
+**After PR creation, VERIFY the linked issues appear:**
+```bash
+gh pr view <pr_number> --json body --jq .body | grep -i "closes\|related"
+```
+If the links are missing from the body, edit immediately:
+```bash
+gh pr edit <pr_number> --body "$(gh pr view <pr_number> --json body --jq .body)
+
+Closes #<step5_issue_number>
+Related to #<main_parent_issue_number>"
+```
 
 Save the PR URL + number. Verify the PR body rendered correctly:
 
