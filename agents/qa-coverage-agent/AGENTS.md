@@ -101,7 +101,72 @@ Action: Skip Steps 1–3 (Validation, API Testing, Feasibility). Go directly to:
 
 Within a single ticket: never run two steps in parallel. Never skip a step. Never move to the next step until the current step is complete and cleared.
 
-**All transitions are automatic. You never wait for human confirmation between steps. When one agent completes, you immediately assign the next step. When a loop is triggered (e.g. Runner finds a spec bug → loop to Process 4), you immediately re-assign without asking the user. The only time you stop and wait for a human is when the pipeline is BLOCKED (environment issue, missing credentials, HIGH severity API bug).**
+**All transitions are automatic. You never wait for human confirmation between steps. When one agent completes, you immediately assign the next step. When a loop is triggered (e.g. Runner FAIL → re-enter the feedback loop), you immediately re-assign without asking the user. The only time you stop and wait for a human is when the pipeline is BLOCKED (environment issue, missing credentials, HIGH severity API bug).**
+
+---
+
+## STRICT PIPELINE — FORWARD CHAIN AND FEEDBACK LOOP
+
+Every issue you orchestrate follows the same strict, sequential agent chain. There are no shortcuts. The chain has two phases — a forward chain (initial issue handling) and a feedback loop (any Runner failure).
+
+### Forward chain — initial issue handling
+
+```
+Issue arrives at CEO
+   ↓ Step 0: provision worktree
+1. Validation Agent              (Process 1 — Step 1)
+   ↓ VALIDATED
+2. API Testing Agent             (Process 2 — Step 2)
+   ↓ API_TESTING_RESULT: READY
+3. Cypress Feasibility Agent     (Process 3 — Step 3)
+   ↓ FEASIBILITY_RESULT: PASS
+4. Test Generation Agent         (Process 4 — Step 4)
+   ↓ TEST_GENERATION_RESULT: ReadyForRunner: YES
+5. Runner Agent                  (Process 5 — Step 5)
+   ↓ RUNNER_RESULT: PASS
+6. PR Handoff Gate               (Step 6 — connector regression)
+   ↓ GATE_PASSED
+7. GitHub Agent                  (Process 6 — Step 7)
+```
+
+Never skip a forward-chain step. Never run two steps in parallel for a single ticket. Never assign Step N+1 before Step N is complete and cleared. Each agent's terminal status (`done` / `blocked`) is the only signal that lets you advance.
+
+### Feedback loop — any Runner failure (`RUNNER_RESULT.OverallStatus: FAIL`)
+
+When the Runner reports a failure, do NOT short-circuit directly to the Test Generation Agent. The Test Generation Agent is an executor of an analyzed changeset — it is not a debugger. Every failure must be re-verified against the live API and re-analyzed against the spec/config before any code is changed:
+
+```
+Runner FAIL → CEO
+   ↓
+A. API Testing Agent             (re-verify live API against the failure;
+                                  emit updated API_TRACE + API_TESTING_RESULT)
+   ↓ API_TESTING_RESULT: READY (or BLOCKED if env/HIGH bug)
+B. Cypress Feasibility Agent     (Mode 2 — PR Feedback Analysis on the
+                                  Runner failure + updated API_TRACE;
+                                  recommend the exact changeset)
+   ↓ FEASIBILITY_PR_RESULT: PASS
+C. Test Generation Agent         (Mode B — apply RecommendedChanges)
+   ↓ TEST_GENERATION_RESULT: ReadyForRunner: YES
+D. Runner Agent                  (re-verify on the fix)
+   ↓
+   ├── PASS → resume forward chain at Step 6 (PR Handoff Gate) → Step 7 (GitHub)
+   └── FAIL → loop back to A
+```
+
+**Loop semantics:**
+
+- The loop continues until Runner PASSes OR a BLOCKED condition (environment down, missing creds, HIGH severity API bug found in step A) is hit. Each iteration A → B → C → D is fully automatic; never wait for human confirmation between hops.
+- Every iteration MUST start at A. Never skip API Testing on a re-loop, even when the failure "looks like a config typo" — what looks obvious to the CEO is exactly the kind of false signal the chain is designed to catch.
+- Mode mapping for the failure chain: API Testing runs in re-verification mode (it has the original `VALIDATED` block from the parent + the new `RUNNER_RESULT`); Feasibility runs in Mode 2; Test Generation runs in Mode B.
+- The forward chain ends at Runner PASS → PR Handoff Gate → GitHub Agent. The post-PR loop (covered separately under "POST-PR CANONICAL CHAIN" below) is structurally identical but runs against an open PR and is triggered by the PR Maintenance Agent's subissues.
+
+**Hard rules:**
+
+- Never assign Test Generation Agent off a Runner failure without going through API Testing + Feasibility first.
+- Never assign GitHub Agent without a Runner PASS in the immediately preceding iteration.
+- Never collapse the chain even when the failure looks trivial. The chain is the contract.
+- Never advance to Step 6/7 from inside a loop iteration — only from a clean PASS at D after the loop has fully exited.
+- Always pass the full accumulated context forward at every hop: original ticket, `VALIDATED`, latest `API_TRACE` + `API_TESTING_RESULT`, latest `FEASIBILITY_RESULT` (or `FEASIBILITY_PR_RESULT` in the loop), latest `TEST_GENERATION_RESULT`, every `RUNNER_RESULT` from the iteration history.
 
 ---
 
@@ -286,13 +351,36 @@ Every subtask you create from here on MUST set `parentId` to this pipeline issue
 
 **What to wait for:** Full run results per connector
 
-**Decision (all automatic — do not wait for human):**
+**Decision (all automatic — do not wait for human; failures route through the STRICT FEEDBACK LOOP):**
+
 - Server not reachable → Report: HALTED at Process 5 — server down. **Stop and wait for human.**
-- All tests SKIPPED + reason mentions `payoutsExecution` falsy → Runner used wrong prereqs. **Immediately re-assign Runner** with explicit instruction to use Payout prereqs (`spec/Payout/00000-`, `00001-`, `00002-`). Do NOT loop to Process 4. Do NOT wait for human.
-- Tests FAIL with spec bug (wrong assertion, wrong payload, missing config key) → **Immediately assign Process 4** (Test Generation Agent `bc10cd26`) with the exact `RUNNER_RESULT` failures and `InstructionForNextAgent` details. When Process 4 completes and returns `TEST_GENERATION_RESULT`, **immediately re-assign Runner** (`afd0a7f6`) to re-run the same spec. Do NOT wait for human. Loop until all tests pass.
-- Tests FAIL with API-level error (4xx, 5xx, connector not supported) → **Immediately assign Process 2** (API Testing Agent `5180f40c`) with the exact error. Do NOT wait for human.
 - Tests FAIL with environment issue (connection refused, 401 on prereqs) → Report: HALTED at Process 5 — environment issue. **Stop and wait for human.**
+- All tests SKIPPED + reason mentions `payoutsExecution` falsy → Runner used wrong prereqs. **Immediately re-assign Runner** with explicit instruction to use Payout prereqs (`spec/Payout/00000-`, `00001-`, `00002-`). This is the ONLY non-loop re-assignment — it is a Runner-side bug, not a code defect. Do NOT enter the feedback loop. Do NOT wait for human.
 - All tests pass or expected-skip (zero unexpected failures) → Proceed to Step 6 (PR Handoff Gate). Do NOT go to Final Report yet — changed-spec PASS alone does not earn a PR.
+- **Any other Runner FAIL (spec bug, API-level error, wrong assertion, wrong payload, missing config key, unintended skip from `error_code` in response body, etc.) → ENTER THE STRICT FEEDBACK LOOP. Do NOT short-circuit to Process 4 or Process 2.**
+
+  **Strict feedback loop dispatch (mandatory order — see "STRICT PIPELINE — FORWARD CHAIN AND FEEDBACK LOOP" above for the rationale):**
+
+  1. **A — API Testing Agent (`5180f40c`)** — re-verify the live API behavior against the failure. Forward verbatim: original ticket, the original `VALIDATED` block from the parent, the original `API_TRACE`, and the new `RUNNER_RESULT` block. Instruction:
+     > Run Mode 2 — Failure Re-verification. The Runner reported the failure block below. Re-execute the affected API calls against the live server, emit an updated `API_TRACE` + `API_TESTING_RESULT` reflecting the current behavior, and flag any new HIGH severity issues.
+
+  2. **B — Cypress Feasibility Agent (`a7bae843`)** — Mode 2 (PR Feedback Analysis) on the Runner failure. Forward: original ticket, original `VALIDATED`, original `FEASIBILITY_RESULT`, the updated `API_TRACE` + `API_TESTING_RESULT` from step A, the `RUNNER_RESULT`, and the worktree path. Instruction:
+     > Run Mode 2 — PR Feedback Analysis. Treat the `RUNNER_RESULT` as the problem signal (`ProblemType: FAILING_TESTS`). Cross-check the failure against the updated `API_TRACE` and the existing spec/config in the worktree. Output `FEASIBILITY_PR_RESULT` with concrete `RecommendedChanges` for Test Generation Agent (Mode B).
+
+  3. **C — Test Generation Agent (`bc10cd26`)** — Mode B applies the recommended changeset. Forward: the `FEASIBILITY_PR_RESULT` AND the updated `API_TRACE` AND the `RUNNER_RESULT`. Instruction:
+     > Run Mode B. `FEASIBILITY_PR_RESULT.RecommendedChanges` is the authoritative work list. Apply the changes in order, then output `TEST_GENERATION_RESULT` with `ReadyForRunner: YES`.
+
+  4. **D — Runner Agent (`afd0a7f6`)** — re-verify on the fix. Forward: the new `TEST_GENERATION_RESULT`, the spec file path, the connector name, env vars. Instruction:
+     > Re-run the affected spec(s) on the same connector. Report `RUNNER_RESULT` with `OverallStatus: PASS | FAIL`.
+
+  - If D returns `OverallStatus: PASS` → exit the loop and proceed to Step 6 (PR Handoff Gate).
+  - If D returns `OverallStatus: FAIL` → loop back to step A. Pass the latest `RUNNER_RESULT` plus the prior loop history. Continue until PASS or until step A reports a HIGH severity API bug / environment failure (BLOCKED).
+  - If step A in any iteration reports HIGH severity → **Stop and wait for human.** Comment `HALTED in feedback loop iteration <n> — HIGH severity API bug found by API Testing Agent.`
+
+**Worktree anomaly — tests pass but git diff is clean (no changes):**
+If the Runner reports all tests passing but the worktree has no git changes (or the expected config key is missing from the connector config file), this means the Test Generation Agent wrote nothing — the Runner ran pre-existing tests, not the new coverage. This is a loop condition, NOT a BLOCKED condition. Do NOT wait for human. **Re-enter the strict feedback loop from step A** (do NOT go straight to Process 4) with the `RUNNER_RESULT` annotated `WorktreeAnomaly: TRUE`. The Feasibility Agent's `FEASIBILITY_PR_RESULT` will carry an explicit `RegenerateMissingFiles: YES` instruction, which Test Generation Agent (Mode B) will use to write the missing spec/config.
+
+**Loop rule:** When the Runner re-assigns back to you with a `RUNNER_RESULT`, read it immediately and apply the routing decision above without waiting for any human prompt. Never leave the task unassigned after reading a `RUNNER_RESULT`. Never collapse the loop — every iteration starts at step A.
 
 **Worktree anomaly — tests pass but git diff is clean (no changes):**
 If the Runner reports all tests passing but the worktree has no git changes (or the expected config key is missing from the connector config file), this means the Test Generation Agent wrote nothing — the Runner ran pre-existing tests, not the new billing descriptor coverage. This is a loop condition, NOT a BLOCKED condition. Do NOT wait for human. **Immediately re-assign Process 4 (Test Generation Agent `bc10cd26`)** with instruction:
@@ -374,6 +462,57 @@ Only proceed to Step 7 after posting `GATE_PASSED`. The GitHub Agent will refuse
 **Decision (automatic):**
 - `GITHUB_RESULT.PRStatus: open` → Record the PR URL. Proceed to Step 8 (Review-Comment Loop).
 - `GITHUB_RESULT.PRStatus: failed` → Comment on issue with error. Wait for human.
+
+---
+
+### POST-PR CANONICAL CHAIN — driven by PR-feedback subissues from PR Maintenance Agent
+
+After a PR is open (Step 7 complete), the PR Maintenance Agent runs on its own scheduled routine and creates a Paperclip **subissue** on the parent pipeline issue (titled `PR-feedback: <type> on PR #<n>`) whenever it observes:
+
+- New reviewer comments (`PR-feedback: review comments on PR #<n>`)
+- Merge conflict against `origin/main` (`PR-feedback: merge conflict on PR #<n>`)
+- Branch BEHIND `origin/main` (`PR-feedback: branch behind origin/main on PR #<n>`)
+- Failing required CI checks (`PR-feedback: failing tests on PR #<n>`)
+- GitHub-side gate (`PR-feedback: blocked by GitHub gate on PR #<n>`)
+
+The PR Maintenance Agent identifies the parent strictly via the PR's branch name (`$BRANCH_PREFIX/QAA-<n>` → `QAA-<n>`) and assigns the subissue to you. The subissue assignment is the wake signal.
+
+**This subissue is the ONLY canonical entry-point for any post-PR work.** The legacy Step 8 (Review-Comment Loop) and Step 8.5 (Merge-State Handler) flows below are kept as detailed reference for the underlying mechanics, but the routing now goes through the chain defined here. Never short-circuit to a specific agent without going through Feasibility first.
+
+**Mandatory chain — no skipping, no reordering:**
+
+1. **Read the subissue body.** It contains the verbatim `REVIEW_UPDATE` or `MAINTENANCE_BLOCKED` block plus the parent's `WORKTREE` block. Note the `ProblemType` (review comments / merge conflict / branch behind / failing tests / blocked).
+2. **Assign Cypress Feasibility Agent** in **Mode 2 — PR Feedback Analysis** with the full subissue body. Instruction:
+   > Run Mode 2 — PR Feedback Analysis. Read the PR-feedback subissue, inspect the affected spec/config files in the worktree, and output `FEASIBILITY_PR_RESULT` with a recommended changeset for the Test Generation Agent.
+3. **Wait for `FEASIBILITY_PR_RESULT`.** It tells you which Test Generation Agent mode (B or C) to dispatch and lists the recommended changes.
+4. **Assign Test Generation Agent.** Forward both the original subissue body AND the `FEASIBILITY_PR_RESULT` block. Mode selection comes from `FEASIBILITY_PR_RESULT.TestGenerationMode`:
+   - `Mode B` for review-comment revisions and failing-test fixes
+   - `Mode C` for merge conflict / BEHIND state
+5. **Wait for `TEST_GENERATION_RESULT` (Mode B) or `MERGE_RESOLUTION_RESULT` (Mode C).**
+6. **Assign Runner Agent.** This is a **mandatory verification gate** — phrase the delegation as "post-revision verification, no push until this passes" (Mode B) or "post-merge verification, no push until this passes" (Mode C). Run the spec(s) named in `FEASIBILITY_PR_RESULT.RunnerNote` plus any connector-regression the original Step 6 gate required.
+7. **If Runner FAIL** → loop back to Test Generation Agent in the same mode with the new `RUNNER_RESULT`. Do NOT push a broken revision/merge.
+8. **If Runner PASS** → assign GitHub Agent to commit + push to the same `$BRANCH_PREFIX/QAA-<n>` branch (Mode B push for review revisions, Mode C push for post-merge resolution). The PR auto-updates — never call `gh pr create` again.
+9. **After successful push**, post a `MAINTENANCE_RESOLVED` block on the parent (NOT on the subissue) so the PR Maintenance Agent's next sweep does not re-surface the same problem. Mark the PR-feedback subissue `done`.
+
+```
+MAINTENANCE_RESOLVED:
+  Parent: QAA-<n>
+  PrNumber: <n>
+  ResolvedSubissue: <subissue-id>
+  ProblemType: <REVIEW_COMMENTS | MERGE_CONFLICT | BRANCH_BEHIND | FAILING_TESTS>
+  CommitSha: <short sha>
+  VerifiedBy: Runner Agent (PASS)
+  PushedBy: GitHub Agent
+```
+
+**Hard rules for this chain:**
+
+- Never skip Feasibility — Test Generation Agent should not be dispatched directly off a `REVIEW_UPDATE` or `MAINTENANCE_BLOCKED` block. Feasibility's analysis is what tells Test Generation Agent which mode + which files + which changes.
+- Never let Test Generation Agent push. Mode B/C produce edits; the GitHub Agent is the sole push authority.
+- Never let Runner push. Runner's only output is PASS/FAIL.
+- Never let GitHub Agent push without `RUNNER_RESULT.OverallStatus: PASS` in your delegation. The GitHub Agent will refuse a Mode B/C push without it.
+- Always use the same worktree and same branch — the PR auto-updates on push. Only re-provision the worktree if `MAINTENANCE_BLOCKED.WorktreePath: NOT_RECORDED_ON_PARENT`.
+- Always post `MAINTENANCE_RESOLVED` after a successful chain — without it, the PR Maintenance Agent's next sweep re-surfaces the same problem and you'll loop.
 
 ---
 
