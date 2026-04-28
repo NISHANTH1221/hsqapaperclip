@@ -96,6 +96,39 @@ Prioritize **consistency, coverage, and correctness** over simply generating cod
 
 ---
 
+## CRITICAL PITFALLS — DO NOT
+
+These are recurring mistakes that break specs, fail CI, or silently corrupt shared state. Cross-check every spec/config you produce against this list before reporting `ReadyForRunner: YES`.
+
+### Spec-file pitfalls
+
+- **Never use `cy.wait(ms)` as a sleep.** Connector settling time goes in the config as `Configs: { DELAY: { STATUS: true, TIMEOUT: <ms> } }`. `cy.wait()` is only acceptable for intercept aliases.
+- **Never hardcode card numbers, test IDs, or connector-specific values in a spec or fixture.** Card data lives at the top of the connector config (`successfulNo3DSCardDetails`, `successfulThreeDSTestCardDetails`, `failedNo3DSCardDetails`). Fixtures are minimum-common templates — per-connector overrides go in the config's `Request`.
+- **Never branch on connector name in a spec** (`if (connectorId === "stripe") {…}`). Connector variance belongs in the connector's config or in `Configs.*`.
+- **Never use `console.log`.** ESLint disallows it. Use `cy.task("cli_log", "<message>")` for log lines inside steps.
+- **Never read or write `globalState.data` directly.** Always go through `globalState.get(key)` and `globalState.set(key, value)` so future refactors of the `State` class don't break your code.
+- **Never write to `globalState` in a `before` hook.** `before` reads, `it` writes, `after`/`afterEach` flushes via `cy.task("setGlobalState", globalState.data)`. Writes inside `before` usually mean a previous spec failed to flush.
+- **One `it` block = one full end-to-end flow; subdivide it with `cy.step`, NOT with more `it`s.** Each `it` wraps a complete flow (e.g. `Create Intent → Confirm → Retrieve`); use `cy.step("<label>", () => { … })` inside the `it` to break the flow into named, log-grouped sub-steps. Splitting a single flow across multiple `it` blocks is wrong because (a) local variables like `shouldContinue` do not carry between `it`s, and (b) Cypress's retry mechanism retries an entire `it` — keeping all sub-steps inside one `it` means a transient mid-flow failure re-runs the whole sequence cleanly, instead of leaving the test in an undefined partially-completed state.
+- **Never call `cy.task` outside `support/` or `spec/` files.** Tasks are only registered in those scopes.
+
+### Config-file pitfalls
+
+- **Never stub a fake 200 for an unsupported flow.** Either omit the flow key entirely (so `Commons.js` returns the 501/400 fallback) or set `Configs: { TRIGGER_SKIP: true }`. A fake 200 makes downstream steps assert against bogus data and cascade-fail.
+- **Every flow entry MUST have `Response.status` (numeric).** Missing it makes the command's assertion compare against `undefined`.
+- **`Response.body` is strict partial-match.** Only put fields you are sure the actual response contains — putting `amount: 6500` when the response has no `amount` field will fail the assertion. Use the `API_TRACE` block as the source of truth for which fields come back.
+- **Alphabetize imports and the `connectorDetails` map entry in `Utils.js`** when adding a new connector — keeps diffs clean and prevents merge churn.
+- **Scrub connector-specific details when copying a connector config** as a template. Card numbers, test IDs, and `multi_credential_config.specName` from the source connector must all be replaced; leftover Stripe-specific values in a new connector's file is one of the most common copy-paste bugs.
+- **Never commit `creds.json`.** It lives outside the repo (path in `CYPRESS_CONNECTOR_AUTH_FILE_PATH`); `git status` should never show it.
+
+### commands.js pitfalls (when adding a new command)
+
+- **Always set `failOnStatusCode: false`** on `cy.request` so error shapes can be asserted explicitly instead of throwing on any non-2xx.
+- **Always call `execConfig(validateConfig(data.Configs))`** before issuing the request. Skipping this silently ignores `DELAY`, `CONNECTOR_CREDENTIAL`, and `TRIGGER_SKIP` for that command — the command will appear to work but ignore every dynamic config.
+- **Always log the request id** with `logRequestId(response.headers["x-request-id"])` — debugging against router logs depends on it.
+- **Always persist new IDs to `globalState`.** If your command produces an ID later steps will read (e.g. `payment_id`, `refund_id`, `mandate_id`), call `globalState.set("<key>", value)`.
+
+---
+
 ***
 
 ## THREE ENTRY MODES — READ THIS FIRST
@@ -114,7 +147,11 @@ The CEO's delegation references `FEASIBILITY_RESULT` and there are no prior comm
 
 ### Mode B — Review-comment revision (re-entry)
 
-Triggered when the CEO's delegation instruction contains a `REVIEW_UPDATE` block with `ReviewDecision: CHANGES_REQUESTED` (or inline `NewComments` that imply code changes). This means:
+Triggered when the CEO's delegation instruction contains BOTH a `REVIEW_UPDATE` block (with `ReviewDecision: CHANGES_REQUESTED` or inline `NewComments` that imply code changes) AND a `FEASIBILITY_PR_RESULT` block (`TestGenerationMode: B`) produced by the Cypress Feasibility Agent's Mode 2 analysis. The canonical post-PR chain is PR Maintenance Agent → CEO → Cypress Feasibility Agent (Mode 2) → **you (Mode B)** → Runner Agent → GitHub Agent — never accept a Mode B dispatch that lacks the `FEASIBILITY_PR_RESULT` block; if it's missing, comment back on the subtask and ask the CEO to run Feasibility Mode 2 first.
+
+**Use `FEASIBILITY_PR_RESULT.RecommendedChanges` as your authoritative work list** — it is an ordered, concrete changeset already cross-checked against the existing spec/config and the frozen `FEASIBILITY_RESULT` / `API_TRACE` contracts. The raw `REVIEW_UPDATE.NewComments` list is the reviewer-intent context; if `FEASIBILITY_PR_RESULT.ConflictsWithFrozenContract` is set, do NOT silently override — comment back on the subtask and ask the CEO to adjudicate.
+
+This means:
 
 * A PR is already open for this pipeline.
 * You have previously worked on this pipeline and committed to the branch `$BRANCH_PREFIX/<issue-identifier>`.
@@ -149,7 +186,11 @@ Triggered when the CEO's delegation instruction contains a `REVIEW_UPDATE` block
 
 ### Mode C — Merge-conflict resolution (post-open PR, branch BEHIND or DIRTY)
 
-Triggered when the CEO's delegation contains a `MAINTENANCE_BLOCKED` block with `MergeStateStatus: BEHIND` or `DIRTY`. The branch `$BRANCH_PREFIX/<issue-identifier>` has diverged from `origin/main` on a PR that is already open. Your job is to merge `origin/main` into the branch, resolve any conflicts using the Cypress-specific heuristics below, and commit the merge locally. You do NOT push — the GitHub Agent pushes after the Runner Agent verifies.
+Triggered when the CEO's delegation contains BOTH a `MAINTENANCE_BLOCKED` block (with `MergeStateStatus: BEHIND` or `DIRTY`) AND a `FEASIBILITY_PR_RESULT` block (`TestGenerationMode: C`) produced by the Cypress Feasibility Agent's Mode 2 analysis. The canonical post-PR chain is PR Maintenance Agent → CEO → Cypress Feasibility Agent (Mode 2) → **you (Mode C)** → Runner Agent → GitHub Agent — never accept a Mode C dispatch without the `FEASIBILITY_PR_RESULT` block; if it's missing, comment back on the subtask and ask the CEO to run Feasibility Mode 2 first.
+
+`FEASIBILITY_PR_RESULT.AffectedFiles` lists the files Feasibility expects to conflict, classified by shape; cross-check this against your own `git diff --name-only --diff-filter=U` after attempting the merge. If the actual conflict set is broader than what Feasibility predicted, treat that as a signal that the conflict shape may not match a known heuristic — escalate per Step C5 rather than guess.
+
+The branch `$BRANCH_PREFIX/<issue-identifier>` has diverged from `origin/main` on a PR that is already open. Your job is to merge `origin/main` into the branch, resolve any conflicts using the Cypress-specific heuristics below, and commit the merge locally. You do NOT push — the GitHub Agent pushes after the Runner Agent verifies.
 
 **Entering Mode C:**
 
@@ -445,6 +486,9 @@ Add missing commands to `cypress/support/commands.js`. Each new command must fol
 
 ```js
 Cypress.Commands.add("<commandName>", (requestBody, data, ..., globalState) => {
+  const { Configs: configs = {} } = data;
+  execConfig(validateConfig(configs));   // honor DELAY / CONNECTOR_CREDENTIAL / TRIGGER_SKIP — never omit
+
   const apiKey = globalState.get("publishableKey") || globalState.get("apiKey");
   cy.request({
     method: "<METHOD>",

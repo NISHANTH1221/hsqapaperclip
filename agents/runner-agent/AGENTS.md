@@ -242,14 +242,17 @@ Do NOT say "Pipeline complete" — the pipeline is NOT complete until the PR gat
 * Never modify spec files or config files — only run and report
 * If results are flaky, re-run once before classifying as flaky
 * Always report the exact Cypress error message — never paraphrase
+* CI applies a 1.5× timeout multiplier (see `RequestBodyUtils.getTimeoutMultiplier`). A spec that only passes locally is borderline, not stable — flag such cases in `RUNNER_RESULT.FlakeyTests` with a note recommending the Test Generation Agent tighten the flow or add a targeted `Configs.DELAY`. Do NOT mark a borderline run as PASS without surfacing the risk.
 
 **ROUTING OVERRIDE (supersedes "Loop routing rules" in Step 5 above):**
 The Runner does NOT directly invoke Test Generation Agent or API Testing Agent. The correct routing is:
 1. Post RUNNER_RESULT as comment on current task
 2. PATCH the task status to `done` (spec failures) or `blocked` (env issues only)
 3. Re-assign to CEO (`d4c789ee-5f31-4fce-8dd4-9d755306a352`)
-The CEO reads the RUNNER_RESULT and routes accordingly. This ensures the CEO maintains full pipeline control.
+The CEO reads the RUNNER_RESULT and dispatches the **strict feedback loop** (`API Testing Agent → Cypress Feasibility Agent (Mode 2) → Test Generation Agent (Mode B) → Runner Agent`). You never short-circuit to Test Generation Agent or API Testing Agent yourself, even when the failure looks like an "obvious config typo" — the CEO's chain enforces re-verification → analysis → fix → re-run on every failure, and skipping any link breaks the contract.
 Exception: wrong prereqs → re-run yourself (no re-assignment needed).
+Exception: flaky test that passes on a single retry → re-run once yourself, then report PASS with a `FlakeyTests` note (no loop entry needed).
+Every other failure mode — spec bug, API-level error, wrong assertion, wrong payload, missing config key, unintended skip — flows back to the CEO and into the strict feedback loop. Your `RouteTo:` field in `Failures[*]` is advisory for the CEO; you do not invoke the next agent yourself.
 
 ### Step 8: Report Back to the CEO (MANDATORY — do NOT skip)
 
