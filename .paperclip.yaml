@@ -8,8 +8,15 @@ agents:
       config:
         dangerouslySkipPermissions: true
         graceSec: 20
-        model: "litellm/open-large"
+        model: "litellm/kimi-latest"
       type: "opencode_local"
+    inputs:
+      env:
+        PAPERCLIP_BASE_URL:
+          description: "Fully-qualified Paperclip control-plane base URL this agent reports to (e.g. `http://localhost:3100` for local — local Paperclip listens on port 3100; or `https://paperclip.example.com` for a hosted instance — use `https://` for any non-localhost host). Used in every POST/PATCH/GET/PUT against `${PAPERCLIP_BASE_URL}/api/...`."
+          kind: "string"
+          default: "http://localhost:3100"
+          requirement: "required"
   cypress-feasibility-agent:
     role: "engineer"
     icon: "eye"
@@ -18,8 +25,15 @@ agents:
       config:
         dangerouslySkipPermissions: true
         graceSec: 20
-        model: "litellm/open-large"
+        model: "litellm/kimi-latest"
       type: "opencode_local"
+    inputs:
+      env:
+        PAPERCLIP_BASE_URL:
+          description: "Fully-qualified Paperclip control-plane base URL this agent reports to (e.g. `http://localhost:3100` for local — local Paperclip listens on port 3100; or `https://paperclip.example.com` for a hosted instance — use `https://` for any non-localhost host). Used in every POST/PATCH/GET/PUT against `${PAPERCLIP_BASE_URL}/api/...`."
+          kind: "string"
+          default: "http://localhost:3100"
+          requirement: "required"
   github-agent:
     role: "engineer"
     icon: "git-branch"
@@ -28,19 +42,24 @@ agents:
       config:
         dangerouslySkipPermissions: true
         graceSec: 20
-        model: "litellm/open-large"
+        model: "litellm/kimi-latest"
       type: "opencode_local"
     inputs:
       env:
         GITHUB_TOKEN:
-          description: "Provide GITHUB_TOKEN for agent github-agent"
+          description: "Bot token for GitHub authentication (sourced via `gh auth token`). Owns the create-write surface — used for `gh issue create`, `gh pr create`, `gh pr edit`, and `git push -u origin $BRANCH_PREFIX/QAA-<n>`. Shared with pr-maintenance-agent (which uses it READ-only)."
           kind: "secret"
           default: ""
-          requirement: "optional"
+          requirement: "required"
         BRANCH_PREFIX:
           description: "Company short form used as the branch/worktree namespace (e.g. `qal`). All PR branches are named `$BRANCH_PREFIX/QAA-<n>`. Must match the value set on qa-coverage-agent and pr-maintenance-agent."
           kind: "string"
           default: ""
+          requirement: "required"
+        PAPERCLIP_BASE_URL:
+          description: "Fully-qualified Paperclip control-plane base URL this agent reports to (e.g. `http://localhost:3100` for local — local Paperclip listens on port 3100; or `https://paperclip.example.com` for a hosted instance — use `https://` for any non-localhost host). Distinct from `$GITHUB_TOKEN` — both must be set."
+          kind: "string"
+          default: "http://localhost:3100"
           requirement: "required"
   pr-maintenance-agent:
     role: "engineer"
@@ -50,7 +69,7 @@ agents:
       config:
         dangerouslySkipPermissions: true
         graceSec: 20
-        model: "litellm/open-large"
+        model: "litellm/kimi-latest"
       type: "opencode_local"
     inputs:
       env:
@@ -64,13 +83,18 @@ agents:
           kind: "string"
           default: ""
           requirement: "required"
+        PAPERCLIP_BASE_URL:
+          description: "Fully-qualified Paperclip control-plane base URL this agent reports to (e.g. `http://localhost:3100` for local — local Paperclip listens on port 3100; or `https://paperclip.example.com` for a hosted instance — use `https://` for any non-localhost host). Used to POST `REVIEW_UPDATE` / `MAINTENANCE_BLOCKED` comments + create PR-feedback subissues + advance the `pr-poll-cursor` document on the parent."
+          kind: "string"
+          default: "http://localhost:3100"
+          requirement: "required"
   qa-coverage-agent:
     role: "ceo"
     adapter:
       config:
         dangerouslySkipPermissions: true
         graceSec: 20
-        model: "litellm/open-large"
+        model: "litellm/kimi-latest"
       type: "opencode_local"
     runtime:
       heartbeat:
@@ -85,6 +109,11 @@ agents:
           kind: "string"
           default: ""
           requirement: "required"
+        PAPERCLIP_BASE_URL:
+          description: "Fully-qualified Paperclip control-plane base URL the CEO reports to (e.g. `http://localhost:3100` for local — local Paperclip listens on port 3100; or `https://paperclip.example.com` for a hosted instance — use `https://` for any non-localhost host). Used to read inbox, post comments on parent issues, assign subtasks to specialist agents, and PATCH status."
+          kind: "string"
+          default: "http://localhost:3100"
+          requirement: "required"
   runner-agent:
     role: "engineer"
     icon: "terminal"
@@ -93,8 +122,15 @@ agents:
       config:
         dangerouslySkipPermissions: true
         graceSec: 20
-        model: "litellm/open-large"
+        model: "litellm/kimi-latest"
       type: "opencode_local"
+    inputs:
+      env:
+        PAPERCLIP_BASE_URL:
+          description: "Fully-qualified Paperclip control-plane base URL this agent reports to (e.g. `http://localhost:3100` for local — local Paperclip listens on port 3100; or `https://paperclip.example.com` for a hosted instance — use `https://` for any non-localhost host). Distinct from `$CYPRESS_BASEURL` (the Hyperswitch router under test) — never confuse the two."
+          kind: "string"
+          default: "http://localhost:3100"
+          requirement: "required"
   test-generation-agent:
     role: "engineer"
     icon: "code"
@@ -103,8 +139,15 @@ agents:
       config:
         dangerouslySkipPermissions: true
         graceSec: 20
-        model: "litellm/open-large"
+        model: "litellm/kimi-latest"
       type: "opencode_local"
+    inputs:
+      env:
+        PAPERCLIP_BASE_URL:
+          description: "Fully-qualified Paperclip control-plane base URL this agent reports to (e.g. `http://localhost:3100` for local — local Paperclip listens on port 3100; or `https://paperclip.example.com` for a hosted instance — use `https://` for any non-localhost host). Used in every POST/PATCH/GET against `${PAPERCLIP_BASE_URL}/api/...`."
+          kind: "string"
+          default: "http://localhost:3100"
+          requirement: "required"
   validation-agent:
     role: "engineer"
     icon: "shield"
@@ -113,8 +156,15 @@ agents:
       config:
         dangerouslySkipPermissions: true
         graceSec: 20
-        model: "litellm/open-large"
+        model: "litellm/kimi-latest"
       type: "opencode_local"
+    inputs:
+      env:
+        PAPERCLIP_BASE_URL:
+          description: "Fully-qualified Paperclip control-plane base URL this agent reports to (e.g. `http://localhost:3100` for local — local Paperclip listens on port 3100; or `https://paperclip.example.com` for a hosted instance — use `https://` for any non-localhost host). Used in every POST/PATCH against `${PAPERCLIP_BASE_URL}/api/...` when reporting the VALIDATED / BLOCKED verdict."
+          kind: "string"
+          default: "http://localhost:3100"
+          requirement: "required"
 company:
   requireBoardApprovalForNewAgents: false
 projects:
@@ -144,5 +194,4 @@ sidebar:
     - "test-generation-agent"
     - "validation-agent"
   projects:
-    - "onboarding"
     - "hyperswitch"
