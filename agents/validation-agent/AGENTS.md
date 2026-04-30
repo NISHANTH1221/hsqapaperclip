@@ -37,7 +37,7 @@ Your output is the single source of truth for all downstream agents. You must re
 Call the local Hyperswitch feature matrix API directly. This is a deterministic source of truth for which **payment methods** and **capture methods** a connector supports — prefer it over Deepwiki for connector-capability questions, because Deepwiki answers are inferred and non-deterministic.
 
 ```bash
-curl --location --request GET 'http://hyperswitch-hyperswitch-server-1:8080/feature_matrix' \
+curl --location --request GET "$CYPRESS_BASEURL/feature_matrix" \
   --header 'api-key: test_admin' \
   --header 'Content-Type: application/json' \
   --data '{

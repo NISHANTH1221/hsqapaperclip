@@ -360,7 +360,7 @@ If `API_TRACE` shows:
 - Step: 5
   Label: Cancel Post Capture
   Method: POST
-  URL: http://hyperswitch-hyperswitch-server-1:8080/payments/pay_abc123/cancel_post_capture
+  URL: $CYPRESS_BASEURL/payments/pay_abc123/cancel_post_capture
   RequestBody: |
     { "cancellation_reason": "requested_by_customer" }
   ResponseStatus: 200

@@ -117,7 +117,7 @@ The CEO is woken by the subissue child-completed event and dispatches the next l
 
 ## REPO ROOT
 
-`/workspace/hyperswitch/cypress-tests/`
+`$HYPERSWITCH_REPO_PATH/cypress-tests/`
 
 All paths below are relative to this root unless stated otherwise.
 
@@ -907,7 +907,7 @@ The key must be all-lowercase. If missing → FAIL.
 
 **6c: creds.json**
 
-File: `/workspace/creds.json`
+File: `$CYPRESS_CONNECTOR_AUTH_FILE_PATH`
 
 Key: `<connectorname>` (e.g. `nuvei`)
 
@@ -949,7 +949,7 @@ Key must be all-lowercase. If missing → FAIL.
 
 **6c: creds.json payout key**
 
-File: `/workspace/creds.json`
+File: `$CYPRESS_CONNECTOR_AUTH_FILE_PATH`
 
 Key: `<connectorname>_payout` (e.g. `nuvei_payout`, `adyen_payout`)
 

@@ -266,7 +266,7 @@ Payment API calls (`POST /payments`, `POST /payments/:id/confirm`, etc.) require
 
 # Step 5a — Create a merchant account
 
-POST http://hyperswitch-hyperswitch-server-1:8080/accounts
+POST $CYPRESS_BASEURL/accounts
 
 Headers: api-key: test_admin
 
@@ -338,7 +338,7 @@ Body:
 
 # Step 5a2 — Create a merchant API key
 
-POST http://hyperswitch-hyperswitch-server-1:8080/api_keys/<merchant_id>
+POST $CYPRESS_BASEURL/api_keys/<merchant_id>
 
 Headers: api-key: test_admin
 
@@ -362,7 +362,7 @@ Body:
 
 # Step 5b — Create a connector (bankofamerica) under the merchant
 
-POST http://hyperswitch-hyperswitch-server-1:8080/account/<merchant_id>/connectors
+POST $CYPRESS_BASEURL/account/<merchant_id>/connectors
 
 Headers: api-key: test_admin
 
@@ -374,7 +374,7 @@ Body:
 
   "connector_name": "bankofamerica",
 
-  "connector_account_details": <read from /workspace/creds.json — use the "bankofamerica" entry>,
+  "connector_account_details": <read from $CYPRESS_CONNECTOR_AUTH_FILE_PATH — use the "bankofamerica" entry>,
 
   "payment_methods_enabled": [
 
@@ -420,7 +420,7 @@ Body:
 
 # Step 5c — Create a customer
 
-POST http://hyperswitch-hyperswitch-server-1:8080/customers
+POST $CYPRESS_BASEURL/customers
 
 Headers: api-key: <merchant api_key from step 5a2>
 
@@ -448,15 +448,15 @@ Use the exact endpoint paths from the `APIFlow` in the `VALIDATED` block. Do not
 
 Environment:
 
-- Base URL: http://hyperswitch-hyperswitch-server-1:8080
+- Base URL: $CYPRESS_BASEURL
 
 - Merchant API key: obtained in Step 5a above
 
-- Connector credentials file: /workspace/creds.json
+- Connector credentials file: $CYPRESS_CONNECTOR_AUTH_FILE_PATH
 
 Blocker check — STOP and report BLOCKED if:
 
-- Server is not reachable at http://hyperswitch-hyperswitch-server-1:8080/health
+- Server is not reachable at $CYPRESS_BASEURL/health
 
 - Admin key `test_admin` rejected (401) on the merchant account creation endpoint
 
@@ -490,7 +490,7 @@ API_TRACE:
 
     Method: POST
 
-    URL: http://hyperswitch-hyperswitch-server-1:8080/accounts
+    URL: $CYPRESS_BASEURL/accounts
 
     RequestHeaders:
 
@@ -526,7 +526,7 @@ API_TRACE:
 
     Method: POST
 
-    URL: http://hyperswitch-hyperswitch-server-1:8080/api_keys/test_merchant_1234567890
+    URL: $CYPRESS_BASEURL/api_keys/test_merchant_1234567890
 
     RequestHeaders:
 

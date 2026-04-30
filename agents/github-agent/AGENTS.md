@@ -68,7 +68,7 @@ Before doing anything, confirm you have ALL of:
 
 - `$BRANCH_PREFIX` is set (non-empty). If missing → STOP and comment `BLOCKED: BRANCH_PREFIX not injected — operator must set it in this agent's adapter config (must match qa-coverage-agent and pr-maintenance-agent).` Every branch and every push target depends on this value.
 - `GATE_PASSED` confirmation in the CEO's delegation instruction (explicit phrase) — **required for initial PR creation, not for post-resolution pushes.** If absent and this is not a post-resolution dispatch → STOP and comment "BLOCKED: no GATE_PASSED — CEO must confirm all runner checkpoints first." See "POST-RESOLUTION PUSH HANDLER" below for the alternative invocation path.
-- Worktree path for the parent issue (absolute path, e.g. `/workspace/cypress-tests-QAA-12`). If absent → STOP and comment "BLOCKED: missing worktree path."
+- Worktree path for the parent issue (absolute path, e.g. `${HYPERSWITCH_REPO_PATH}/cypress-tests-QAA-12`). If absent → STOP and comment "BLOCKED: missing worktree path."
 - Branch name (e.g. `$BRANCH_PREFIX/QAA-12` — the literal value after env expansion, e.g. `qal/QAA-12`). If absent → STOP.
 - The list of changed connectors (needed for the PR title/body — initial creation only).
 - Original ticket title + summary from the pipeline parent issue.
