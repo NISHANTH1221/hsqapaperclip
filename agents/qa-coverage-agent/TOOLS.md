@@ -48,12 +48,14 @@ Use for persisting context across runs:
 
 ***
 
-## Fixed Environment (pass to Runner Agent)
+## Environment (pass to Runner Agent)
+
+Values come from this agent's adapter config env vars — do not hardcode:
 
 ```sh
 CYPRESS_ADMINAPIKEY=test_admin
-CYPRESS_BASEURL=http://hyperswitch-hyperswitch-server-1:8080
-CYPRESS_CONNECTOR_AUTH_FILE_PATH=/workspace/creds.json
+CYPRESS_BASEURL=$CYPRESS_BASEURL
+CYPRESS_CONNECTOR_AUTH_FILE_PATH=$CYPRESS_CONNECTOR_AUTH_FILE_PATH
 CYPRESS_HS_EMAIL=sk.sakil+8@juspay.in
 CYPRESS_HS_PASSWORD=6rxg7DUuCVEc!Aq
 ```

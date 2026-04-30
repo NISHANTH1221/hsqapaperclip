@@ -79,7 +79,7 @@ When the issue asks for detailed testing, deep verification, or thorough review 
 
 1. **Provision a worktree** (Step 0) — check out the PR branch into a worktree so agents can work on it.
 2. **Assign API Testing Agent (Process 2)** — with instruction:
-   > Analyze PR #<number>. Read the changed files in the worktree at <path> to understand what the PR modifies (spec files, config files, commands). For each changed test flow, verify the API flow works against the live server at http://localhost:8080. Return API_TESTING_RESULT with findings — are the test assertions correct? Do the expected response statuses match reality? Are there missing edge cases?
+   > Analyze PR #<number>. Read the changed files in the worktree at <path> to understand what the PR modifies (spec files, config files, commands). For each changed test flow, verify the API flow works against the live server at `$CYPRESS_BASEURL`. Return API_TESTING_RESULT with findings — are the test assertions correct? Do the expected response statuses match reality? Are there missing edge cases?
 3. **After API Testing Agent reports** — Assign **Cypress Feasibility Agent (Process 3)** if structural issues were found (wrong file placement, missing Utils.js entries, missing commands).
 4. **Assign Runner Agent (Process 5)** — with the API Testing results and instruction to run the changed specs against the live server.
 5. **If Runner reports failures or the issue says "refactor if wrong"** — Assign **Test Generation Agent (Process 4)** (Mode B) with both the API_TESTING_RESULT and RUNNER_RESULT to fix the specs with correct assertions based on actual API behavior.
@@ -189,31 +189,33 @@ D. Runner Agent                  (re-verify on the fix)
 
 Every pipeline runs in its own git worktree so multiple pipelines can work on the same repo in parallel without stomping on each other. Do this once, at first entry into the pipeline, before assigning Process 1.
 
-**Pre-flight:** `$BRANCH_PREFIX` must be set (non-empty). If missing → STOP and comment on the parent `BLOCKED: BRANCH_PREFIX not injected — operator must set it in this agent's adapter config.`. Every branch and every downstream filter (`pr-maintenance-agent`'s sweep, `github-agent`'s push target) depends on this value being the same across the three agents.
+**Pre-flight:** `$BRANCH_PREFIX` and `$HYPERSWITCH_REPO_PATH` must be set (non-empty). If either is missing → STOP and comment on the parent `BLOCKED: <var> not injected — operator must set it in this agent's adapter config.`. Every branch and every downstream filter (`pr-maintenance-agent`'s sweep, `github-agent`'s push target) depends on `$BRANCH_PREFIX` being the same across the three agents.
 
-**Worktree path convention:** `/workspace/cypress-tests-<issue-identifier>` (sibling to the main repo)
+**Repo path convention:** `$HYPERSWITCH_REPO_PATH` (e.g. `/workspace/hyperswitch` hosted, or your local checkout)
+**Worktree path convention:** `${HYPERSWITCH_REPO_PATH}/cypress-tests-<issue-identifier>` (inside the main repo — only the repo mount persists across container restarts)
 **Branch convention:** `$BRANCH_PREFIX/<issue-identifier>` (e.g. `qal/QAA-12`)
 
 Check if the worktree already exists (this may be a re-entry heartbeat):
 
 ```bash
-git -C /workspace/hyperswitch worktree list | grep "cypress-tests-<issue-identifier>"
+WORKTREE_PATH="${HYPERSWITCH_REPO_PATH}/cypress-tests-<issue-identifier>"
+git -C "$HYPERSWITCH_REPO_PATH" worktree list | grep "cypress-tests-<issue-identifier>"
 ```
 
 If present → skip provisioning, record the path for downstream agents.
 If absent → create it:
 
 ```bash
-cd /workspace/hyperswitch
+cd "$HYPERSWITCH_REPO_PATH"
 git fetch origin main
-git worktree add /workspace/cypress-tests-<issue-identifier> -b "$BRANCH_PREFIX/<issue-identifier>" origin/main
+git worktree add "$WORKTREE_PATH" -b "$BRANCH_PREFIX/<issue-identifier>" origin/main
 ```
 
-Record the absolute worktree path and branch name as a comment on the parent issue so downstream heartbeats see it:
+Record the resolved absolute worktree path and branch name as a comment on the parent issue so downstream heartbeats see it (resolve `$WORKTREE_PATH` to its concrete value before posting — comments must contain absolute paths, not env-var expressions):
 
 ```
 WORKTREE:
-  Path: /workspace/cypress-tests-<issue-identifier>
+  Path: <resolved absolute worktree path>
   Branch: $BRANCH_PREFIX/<issue-identifier>
   BaseCommit: <sha>
 ```
@@ -247,7 +249,7 @@ Every subtask you create from here on MUST set `parentId` to this pipeline issue
 - The **full `VALIDATED` block verbatim** from the Validation Agent — do not summarize or paraphrase it. This includes the complete `Downstream context` section: `NewCypressFlow`, `ProposedConfigKey`, `ProposedPaymentMethodSection`, `APIFlow` (with preconditions, request fields, response fields, error codes), and `ConnectorNotes`.
 
 **Instruction to give the agent:**
-> Run Process 2 — API Testing. The Validation Agent has already researched the API — do NOT re-research the codebase. Use the `APIFlow`, `ProposedConfigKey`, `ProposedPaymentMethodSection`, and `NewCypressFlow` fields from the VALIDATED block below as your starting point. Your job is to verify the flow works against the live server at http://hyperswitch-hyperswitch-server-1:8080 confirm the config key mapping and ResponseCustom flags, and produce the `API_TESTING_RESULT` block. Return: `API_TESTING_RESULT` block with AutomationReadiness verdict.
+> Run Process 2 — API Testing. The Validation Agent has already researched the API — do NOT re-research the codebase. Use the `APIFlow`, `ProposedConfigKey`, `ProposedPaymentMethodSection`, and `NewCypressFlow` fields from the VALIDATED block below as your starting point. Your job is to verify the flow works against the live server at $CYPRESS_BASEURL confirm the config key mapping and ResponseCustom flags, and produce the `API_TESTING_RESULT` block. Return: `API_TESTING_RESULT` block with AutomationReadiness verdict.
 
 **What to wait for:** Issue report + automation readiness verdict
 
@@ -346,13 +348,13 @@ Every subtask you create from here on MUST set `parentId` to this pipeline issue
 **What to send:**
 - Spec file path from Step 4
 - Connector name
-- Path to creds.json: `/workspace/creds.json`
-- Environment variables:
+- Path to creds.json: `$CYPRESS_CONNECTOR_AUTH_FILE_PATH`
+- Environment variables (all values come from this agent's adapter config env vars — do not hardcode):
   ```
   CYPRESS_ADMINAPIKEY=test_admin
-  CYPRESS_BASEURL=http://hyperswitch-hyperswitch-server-1:8080
+  CYPRESS_BASEURL=$CYPRESS_BASEURL
   CYPRESS_CONNECTOR=<connector_name>
-  CYPRESS_CONNECTOR_AUTH_FILE_PATH=/workspace/creds.json
+  CYPRESS_CONNECTOR_AUTH_FILE_PATH=$CYPRESS_CONNECTOR_AUTH_FILE_PATH
   CYPRESS_HS_EMAIL=sk.sakil+8@juspay.in
   CYPRESS_HS_PASSWORD=6rxg7DUuCVEc!Aq
   ```
@@ -588,9 +590,9 @@ These are both fixable in the same chain — Mode C performs `git fetch` + `git 
 
 1. If `WorktreePath == NOT_RECORDED_ON_PARENT` → re-provision the worktree per Step 0 before dispatching. The branch already exists upstream as `$BRANCH_PREFIX/QAA-<n>`, so the worktree must check out that branch directly:
    ```bash
-   cd /workspace/hyperswitch
+   cd "$HYPERSWITCH_REPO_PATH"
    git fetch origin "$BRANCH_PREFIX/QAA-<n>"
-   git worktree add /workspace/cypress-tests-QAA-<n> "$BRANCH_PREFIX/QAA-<n>"
+   git worktree add "${HYPERSWITCH_REPO_PATH}/cypress-tests-QAA-<n>" "$BRANCH_PREFIX/QAA-<n>"
    ```
    Post a fresh `WORKTREE:` block on the parent issue.
 2. Assign Test Generation Agent (`bc10cd26`) in **Mode C** (merge-conflict resolution). The delegation instruction must contain:
@@ -627,8 +629,8 @@ Branch protection, missing required reviews, or failing required checks are not 
 After PR is merged or closed:
 
 ```bash
-git -C /workspace/hyperswitch worktree remove /workspace/cypress-tests-<issue-identifier>
-git -C /workspace/hyperswitch branch -d "$BRANCH_PREFIX/<issue-identifier>"
+git -C "$HYPERSWITCH_REPO_PATH" worktree remove "${HYPERSWITCH_REPO_PATH}/cypress-tests-<issue-identifier>"
+git -C "$HYPERSWITCH_REPO_PATH" branch -d "$BRANCH_PREFIX/<issue-identifier>"
 ```
 
 Post a comment on the parent issue:

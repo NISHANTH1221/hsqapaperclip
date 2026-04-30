@@ -34,13 +34,15 @@ Your job is to take the `TEST_GENERATION_RESULT` block from the Test Generation 
 ### Step 1: VERIFY SERVER IS RUNNING
 
 ```bash
-curl --location http://hyperswitch-hyperswitch-server-1:8080/health/ready
+curl --location "$CYPRESS_BASEURL/health/ready"
 ```
+
+`$CYPRESS_BASEURL` is the Hyperswitch router under test, injected by the operator via this agent's adapter config (default `http://hyperswitch-hyperswitch-server-1:8080` for the hosted compose stack; set to `http://localhost:8080` or wherever the router listens when running locally). If unset/empty at the start of your heartbeat, refuse to proceed and PATCH your subtask `blocked` with `BLOCKED: $CYPRESS_BASEURL not injected — operator must set it in this agent's adapter config.`
 
 If the server is not running or returns an error → STOP. Report:
 
 ```
-BLOCKED: Server not running at http://hyperswitch-hyperswitch-server-1:8080
+BLOCKED: Server not running at $CYPRESS_BASEURL
 ```
 
 ### Step 2: CONFIRM INPUTS
@@ -58,15 +60,16 @@ If any input is missing → ask the CEO agent before proceeding.
 
 ### Step 3: SET ENVIRONMENT VARIABLES
 
-Use exactly these values:
+`$CYPRESS_BASEURL` and `$CYPRESS_CONNECTOR_AUTH_FILE_PATH` are injected by the operator via this agent's adapter config — never hardcode their values. Forward them into the Cypress run environment as-is, and only set the static values below yourself:
 
 ```bash
 export CYPRESS_ADMINAPIKEY='test_admin'
-export CYPRESS_BASEURL='http://hyperswitch-hyperswitch-server-1:8080'
 export CYPRESS_CONNECTOR='<connector_name>'
-export CYPRESS_CONNECTOR_AUTH_FILE_PATH='/workspace/creds.json'
 export CYPRESS_HS_EMAIL='sk.sakil+8@juspay.in'
 export CYPRESS_HS_PASSWORD='6rxg7DUuCVEc!Aq'
+# Already in env (from adapter config) — Cypress will pick these up:
+#   CYPRESS_BASEURL                   (e.g. http://hyperswitch-hyperswitch-server-1:8080 hosted, http://localhost:8080 local)
+#   CYPRESS_CONNECTOR_AUTH_FILE_PATH  (e.g. /workspace/creds.json hosted, or your local creds path)
 ```
 
 Replace `<connector_name>` with the actual connector name from the ticket (e.g. `deutschebank`, `stripe`).
@@ -89,7 +92,7 @@ Run these in order before any Payment spec:
 
 **CRITICAL:** Payout specs have their OWN prerequisite chain in `spec/Payout/`. Do NOT use the Payment prerequisites for Payout specs.
 
-`00002-ConnectorCreate.cy.js` calls `cy.createPayoutConnectorCallTest()` which reads the `<connector>_payout` key from `creds.json` and sets `globalState.payoutsExecution = true`. Without this, ALL payout tests will be skipped even though the server is reachable.
+`00002-ConnectorCreate.cy.js` calls `cy.createPayoutConnectorCallTest()` which reads the `<connector>_payout` key from the creds file at `$CYPRESS_CONNECTOR_AUTH_FILE_PATH` and sets `globalState.payoutsExecution = true`. Without this, ALL payout tests will be skipped even though the server is reachable.
 
 **For a new payout connector being onboarded:** Run the full payout suite — all existing generic payout specs must pass for the connector to be merge-ready. The generic specs are connector-agnostic; they use `utils.getConnectorDetails(connectorId)` at runtime and will pick up the new connector's config automatically.
 
@@ -106,28 +109,26 @@ Run in this order:
 
 **For an existing payout connector running a targeted fix:** You may run only the relevant spec (e.g., just `00003-CardTest.cy.js`) plus the 3 prereqs if the fix is scoped to that flow. But for a full onboarding or merge-readiness check, always run all 4 generic specs.
 
-Working directory: `/workspace/hyperswitch/cypress-tests/`
+Working directory: the per-issue worktree's cypress-tests directory — `${HYPERSWITCH_REPO_PATH}/cypress-tests-<issue-identifier>/cypress-tests/`. Use the absolute worktree path the CEO recorded in the parent issue's `WORKTREE:` block. `$HYPERSWITCH_REPO_PATH` is injected by the operator via this agent's adapter config (default `/workspace/hyperswitch` hosted; override locally).
 
 #### Full command — Payment spec:
 
 ```bash
 CYPRESS_ADMINAPIKEY='test_admin' \
-CYPRESS_BASEURL='http://hyperswitch-hyperswitch-server-1:8080' \
 CYPRESS_CONNECTOR='<connector_name>' \
-CYPRESS_CONNECTOR_AUTH_FILE_PATH='/workspace/creds.json' \
 CYPRESS_HS_EMAIL='sk.sakil+8@juspay.in' \
 CYPRESS_HS_PASSWORD='6rxg7DUuCVEc!Aq' \
 npx cypress run \
   --spec "cypress/e2e/spec/Payment/01-AccountCreate.cy.js,cypress/e2e/spec/Payment/02-CustomerCreate.cy.js,cypress/e2e/spec/Payment/03-ConnectorCreate.cy.js,<CHANGED_SPEC_PATH>"
 ```
 
+`CYPRESS_BASEURL` and `CYPRESS_CONNECTOR_AUTH_FILE_PATH` are inherited from the agent's process environment — do not re-export them inline.
+
 #### Full command — Payout spec (new connector onboarding — runs all generic specs):
 
 ```bash
 CYPRESS_ADMINAPIKEY='test_admin' \
-CYPRESS_BASEURL='http://hyperswitch-hyperswitch-server-1:8080' \
 CYPRESS_CONNECTOR='<connector_name>' \
-CYPRESS_CONNECTOR_AUTH_FILE_PATH='/workspace/creds.json' \
 CYPRESS_HS_EMAIL='sk.sakil+8@juspay.in' \
 CYPRESS_HS_PASSWORD='6rxg7DUuCVEc!Aq' \
 npx cypress run \
@@ -238,7 +239,7 @@ Do NOT say "Pipeline complete" — the pipeline is NOT complete until the PR gat
 * For Payment specs: use `spec/Payment/01-`, `02-`, `03-` as prereqs
 * For Payout specs: use `spec/Payout/00000-`, `00001-`, `00002-` as prereqs — NEVER mix them
 * `CYPRESS_ADMINAPIKEY` for localhost is always `test_admin`
-* Never run with a connector that is not in creds.json — check first
+* Never run with a connector that is not in `$CYPRESS_CONNECTOR_AUTH_FILE_PATH` (creds.json) — check first
 * Never modify spec files or config files — only run and report
 * If results are flaky, re-run once before classifying as flaky
 * Always report the exact Cypress error message — never paraphrase
@@ -283,7 +284,7 @@ Headers:
 | --- | --- |
 | `OverallStatus: PASS` (all tests passed or legitimately expected-skipped) | `{ "status": "done", "comment": "RUNNER_RESULT: PASS on <connector>. See previous comment." }` |
 | `OverallStatus: FAIL` with any `RouteTo: Process 4` or `RouteTo: Process 2` failure | `{ "status": "done", "comment": "RUNNER_RESULT: FAIL — CEO routing required. See previous comment." }` |
-| `OverallStatus: BLOCKED` (env down, creds missing, connector not in creds.json) | `{ "status": "blocked", "comment": "RUNNER_RESULT: BLOCKED — see previous comment. Reason: <one line>." }` |
+| `OverallStatus: BLOCKED` (env down, creds missing, connector not in `$CYPRESS_CONNECTOR_AUTH_FILE_PATH`) | `{ "status": "blocked", "comment": "RUNNER_RESULT: BLOCKED — see previous comment. Reason: <one line>." }` |
 
 Note: FAIL is `done`, not `blocked`. A spec failure is a normal pipeline outcome the CEO must inspect and route; `blocked` is reserved for conditions the CEO cannot fix by looping back to another agent.
 

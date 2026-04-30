@@ -17,6 +17,21 @@ agents:
           kind: "string"
           default: "http://localhost:3100"
           requirement: "required"
+        HYPERSWITCH_REPO_PATH:
+          description: "Absolute path to the local Hyperswitch git checkout the agent operates against (e.g. `/workspace/hyperswitch` in the hosted runner, or `/Users/<you>/code/hyperswitch` when running on your laptop). Worktrees for parallel pipelines are created inside this directory: `${HYPERSWITCH_REPO_PATH}/cypress-tests-<issue-identifier>`."
+          kind: "string"
+          default: "/workspace/hyperswitch"
+          requirement: "required"
+        CYPRESS_CONNECTOR_AUTH_FILE_PATH:
+          description: "Absolute path to the Cypress connector credentials file (`creds.json`). Defaults to `/workspace/creds.json` in the hosted runner — override when running locally if the file lives elsewhere. Same env name Cypress consumes at runtime."
+          kind: "string"
+          default: "/workspace/creds.json"
+          requirement: "required"
+        CYPRESS_BASEURL:
+          description: "Fully-qualified base URL of the Hyperswitch router under test (e.g. `http://hyperswitch-hyperswitch-server-1:8080` in the hosted compose stack, or `http://localhost:8080` when running the router locally). Distinct from `$PAPERCLIP_BASE_URL` (the Paperclip control plane) — never confuse the two."
+          kind: "string"
+          default: "http://hyperswitch-hyperswitch-server-1:8080"
+          requirement: "required"
   cypress-feasibility-agent:
     role: "engineer"
     icon: "eye"
@@ -33,6 +48,16 @@ agents:
           description: "Fully-qualified Paperclip control-plane base URL this agent reports to (e.g. `http://localhost:3100` for local — local Paperclip listens on port 3100; or `https://paperclip.example.com` for a hosted instance — use `https://` for any non-localhost host). Used in every POST/PATCH/GET/PUT against `${PAPERCLIP_BASE_URL}/api/...`."
           kind: "string"
           default: "http://localhost:3100"
+          requirement: "required"
+        HYPERSWITCH_REPO_PATH:
+          description: "Absolute path to the local Hyperswitch git checkout the agent inspects for repo structure / connector configs / commands.js (e.g. `/workspace/hyperswitch` in the hosted runner, or `/Users/<you>/code/hyperswitch` when running on your laptop). The cypress-tests directory lives at `${HYPERSWITCH_REPO_PATH}/cypress-tests`."
+          kind: "string"
+          default: "/workspace/hyperswitch"
+          requirement: "required"
+        CYPRESS_CONNECTOR_AUTH_FILE_PATH:
+          description: "Absolute path to the Cypress connector credentials file (`creds.json`) inspected during the connector-creds feasibility check. Defaults to `/workspace/creds.json` in the hosted runner — override when running locally if the file lives elsewhere."
+          kind: "string"
+          default: "/workspace/creds.json"
           requirement: "required"
   github-agent:
     role: "engineer"
@@ -60,6 +85,11 @@ agents:
           description: "Fully-qualified Paperclip control-plane base URL this agent reports to (e.g. `http://localhost:3100` for local — local Paperclip listens on port 3100; or `https://paperclip.example.com` for a hosted instance — use `https://` for any non-localhost host). Distinct from `$GITHUB_TOKEN` — both must be set."
           kind: "string"
           default: "http://localhost:3100"
+          requirement: "required"
+        HYPERSWITCH_REPO_PATH:
+          description: "Absolute path to the local Hyperswitch git checkout the agent operates against — used to locate the per-issue worktree at `${HYPERSWITCH_REPO_PATH}/cypress-tests-<issue-identifier>` for `git push`, `gh pr create`, and post-merge cleanup. Defaults to `/workspace/hyperswitch` (the docker mount point); override to your local checkout if you run the agent outside docker."
+          kind: "string"
+          default: "/workspace/hyperswitch"
           requirement: "required"
   pr-maintenance-agent:
     role: "engineer"
@@ -114,6 +144,21 @@ agents:
           kind: "string"
           default: "http://localhost:3100"
           requirement: "required"
+        HYPERSWITCH_REPO_PATH:
+          description: "Absolute path to the local Hyperswitch git checkout. The CEO uses this to provision per-issue worktrees inside the repo: `${HYPERSWITCH_REPO_PATH}/cypress-tests-<issue-identifier>`. Forwarded to the runner / test-generation / github agents via the parent issue. Defaults to `/workspace/hyperswitch` in the hosted runner; override when running locally."
+          kind: "string"
+          default: "/workspace/hyperswitch"
+          requirement: "required"
+        CYPRESS_CONNECTOR_AUTH_FILE_PATH:
+          description: "Absolute path to the Cypress connector credentials file (`creds.json`). Forwarded verbatim to the Runner Agent in Step 5 environment variables. Defaults to `/workspace/creds.json` in the hosted runner; override when running locally if the file lives elsewhere."
+          kind: "string"
+          default: "/workspace/creds.json"
+          requirement: "required"
+        CYPRESS_BASEURL:
+          description: "Fully-qualified base URL of the Hyperswitch router under test, forwarded to the Runner Agent (and used in CEO-issued instructions to API Testing). Defaults to `http://hyperswitch-hyperswitch-server-1:8080` in the hosted compose stack; set to `http://localhost:8080` (or wherever the router listens) when running locally. Distinct from `$PAPERCLIP_BASE_URL` — never confuse the two."
+          kind: "string"
+          default: "http://hyperswitch-hyperswitch-server-1:8080"
+          requirement: "required"
   runner-agent:
     role: "engineer"
     icon: "terminal"
@@ -130,6 +175,21 @@ agents:
           description: "Fully-qualified Paperclip control-plane base URL this agent reports to (e.g. `http://localhost:3100` for local — local Paperclip listens on port 3100; or `https://paperclip.example.com` for a hosted instance — use `https://` for any non-localhost host). Distinct from `$CYPRESS_BASEURL` (the Hyperswitch router under test) — never confuse the two."
           kind: "string"
           default: "http://localhost:3100"
+          requirement: "required"
+        HYPERSWITCH_REPO_PATH:
+          description: "Absolute path to the local Hyperswitch git checkout. The runner `cd`s into the per-issue worktree at `${HYPERSWITCH_REPO_PATH}/cypress-tests-<issue-identifier>/cypress-tests` to execute Cypress. Defaults to `/workspace/hyperswitch` in the hosted runner; override when running locally."
+          kind: "string"
+          default: "/workspace/hyperswitch"
+          requirement: "required"
+        CYPRESS_CONNECTOR_AUTH_FILE_PATH:
+          description: "Absolute path to the Cypress connector credentials file (`creds.json`). Exported verbatim into the Cypress run environment so the suite can read connector keys. Defaults to `/workspace/creds.json` in the hosted runner; override when running locally if the file lives elsewhere."
+          kind: "string"
+          default: "/workspace/creds.json"
+          requirement: "required"
+        CYPRESS_BASEURL:
+          description: "Fully-qualified base URL of the Hyperswitch router under test. Used by the health check (`${CYPRESS_BASEURL}/health/ready`) and exported into every `npx cypress run` invocation. Defaults to `http://hyperswitch-hyperswitch-server-1:8080` in the hosted compose stack; set to `http://localhost:8080` (or wherever the router listens) when running locally. Distinct from `$PAPERCLIP_BASE_URL`."
+          kind: "string"
+          default: "http://hyperswitch-hyperswitch-server-1:8080"
           requirement: "required"
   test-generation-agent:
     role: "engineer"
@@ -148,6 +208,11 @@ agents:
           kind: "string"
           default: "http://localhost:3100"
           requirement: "required"
+        HYPERSWITCH_REPO_PATH:
+          description: "Absolute path to the local Hyperswitch git checkout. The agent writes/edits spec and config files inside the per-issue worktree at `${HYPERSWITCH_REPO_PATH}/cypress-tests-<issue-identifier>/cypress-tests`. Defaults to `/workspace/hyperswitch` in the hosted runner; override when running locally."
+          kind: "string"
+          default: "/workspace/hyperswitch"
+          requirement: "required"
   validation-agent:
     role: "engineer"
     icon: "shield"
@@ -164,6 +229,11 @@ agents:
           description: "Fully-qualified Paperclip control-plane base URL this agent reports to (e.g. `http://localhost:3100` for local — local Paperclip listens on port 3100; or `https://paperclip.example.com` for a hosted instance — use `https://` for any non-localhost host). Used in every POST/PATCH against `${PAPERCLIP_BASE_URL}/api/...` when reporting the VALIDATED / BLOCKED verdict."
           kind: "string"
           default: "http://localhost:3100"
+          requirement: "required"
+        CYPRESS_BASEURL:
+          description: "Fully-qualified base URL of the Hyperswitch router used for the live `feature_matrix` query in Process 1. Defaults to `http://hyperswitch-hyperswitch-server-1:8080` in the hosted compose stack; set to `http://localhost:8080` (or wherever the router listens) when running locally. Distinct from `$PAPERCLIP_BASE_URL`."
+          kind: "string"
+          default: "http://hyperswitch-hyperswitch-server-1:8080"
           requirement: "required"
 company:
   requireBoardApprovalForNewAgents: false
